@@ -2,17 +2,20 @@
 程序总入口模块。
 
 职责：
-- 解析启动参数
 - 初始化配置管理器（加载 .env + config.yaml + logging.yaml + presets.yaml）
-- 启动 TUI 主应用（菜单路由 + 交互界面）
+- 初始化存储后端（通过 StorageFactory 创建）
+- 启动 TUI 主应用（菜单路由 + 用户管理 + 交互界面）
 
 启动方式：
     uv run python src/main.py         # 默认 dev 环境
     APP_ENV=prod uv run python src/main.py  # 生产环境
 
-后续步骤中会逐步对接：
-- StorageFactory：创建存储后端（Step 3）
-- UserManager、SessionManager、ChatEngine：核心业务（Step 4-7）
+当前实现状态（Step 4）：
+- 配置管理：已实现
+- 存储后端：SQLite（已实现）
+- 用户管理：已实现（创建/切换/删除/列表）
+- 会话管理：Step 7-8
+- 对话引擎：Step 6-7
 """
 
 import asyncio
@@ -27,8 +30,9 @@ if sys.platform == "win32":
 
 
 async def _main_async() -> None:
-    """异步主流程：初始化配置 → 创建 TUI → 启动主循环。"""
+    """异步主流程：初始化配置 → 创建存储 → 启动 TUI 主循环。"""
     from core.config_manager import ConfigManager
+    from storage.factory import StorageFactory
     from ui.tui.app import TUIApp
 
     print("\n  ⏳ 正在加载配置...", end="", flush=True)
@@ -52,8 +56,18 @@ async def _main_async() -> None:
         print(f"     API : {config.api_base_url}")
         print()
 
+        # Step 4: 初始化存储后端
+        print("  ⏳ 正在初始化存储后端...", end="", flush=True)
+        try:
+            storage = await StorageFactory.create(config)
+            print(f"\r  ✓ 存储后端就绪 ({config.storage_type})                    ")
+        except Exception as e:
+            print(f"\r  ✗ 存储后端初始化失败: {e}                        ")
+            print("    请运行: uv run python scripts/init_db.py")
+            raise
+
         # 创建并启动 TUI 应用
-        app = TUIApp(config_manager=config)
+        app = TUIApp(config_manager=config, storage=storage)
         await app.run()
 
     except FileNotFoundError as e:

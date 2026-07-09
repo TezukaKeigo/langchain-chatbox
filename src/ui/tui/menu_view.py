@@ -11,10 +11,9 @@
 所有菜单使用统一的交互模式：
   显示选项列表 → 等待键盘输入 → 执行对应操作 → 返回结果
 
-当前状态（Step 2）：
-  除主菜单外的所有操作均为 stub 占位 — 显示"将在 Step X 中实现"提示。
-  用户管理和预设管理的部分基础交互在 Step 4-5 实现。
-  会话管理在 Step 7-8 实现。
+当前状态（Step 4）：
+  用户管理（创建/切换/删除/列表）：已完整实现，对接 SQLite 数据库。
+  预设管理、会话管理：仍为 stub 占位，将在 Step 5-8 实现。
 """
 
 from typing import Any, Dict, List, Optional
@@ -30,6 +29,7 @@ from .widgets import (
     print_info,
     print_menu_options,
     print_success,
+    print_table,
     print_warning,
 )
 
@@ -190,13 +190,13 @@ class MenuView:
                 break
 
             if choice == "1":
-                await self._stub_create_user()
+                await self._create_user()
             elif choice == "2":
-                await self._stub_switch_user()
+                await self._switch_user()
             elif choice == "3":
-                await self._stub_delete_user()
+                await self._delete_user()
             elif choice == "4":
-                await self._stub_list_users()
+                await self._list_users()
 
         return None
 
@@ -363,57 +363,331 @@ class MenuView:
         return None
 
     # ============================================================
-    # Stub 占位方法 — 用户管理
+    # 用户管理 — 真实实现（Step 4）
     # ============================================================
 
-    async def _stub_create_user(self) -> None:
-        """Stub: 创建新用户。
+    def _get_user_manager(self):
+        """安全获取 UserManager 实例。
 
-        Step 4 将实现完整的用户创建逻辑：
+        Returns:
+            UserManager 实例，或 None（存储未初始化时）
+
+        如果存储后端尚未初始化（开发早期），返回 None
+        并显示友好提示，而非让程序崩溃。
+        """
+        user_mgr = self._state.get("user_manager")
+        if user_mgr is None:
+            print_error("存储后端尚未初始化，请重启程序")
+            print_info("如果问题持续存在，请运行: uv run python scripts/init_db.py")
+        return user_mgr
+
+    async def _create_user(self) -> None:
+        """创建新用户。
+
+        流程：
         1. 提示输入用户名
-        2. 校验唯一性
+        2. 校验合法性（非空、长度、唯一性）
         3. 写入数据库
-        4. 自动设置为当前用户
+        4. 自动设置为当前活跃用户
         """
         console.clear()
-        print_header("创建新用户", subtitle="Step 4 将实现完整的用户管理系统")
+        print_header("创建新用户", subtitle="首次使用时创建唯一用户名")
 
-        print_info("请输入用户名（当前为演示模式）:")
+        user_mgr = self._get_user_manager()
+        if user_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        # 1. 输入用户名
+        print_info("请输入新用户名（1-50 字符，不可与已有用户重复）")
+        print()
         try:
             username = await self._get_text_input("用户名: ")
-            if username:
-                print_warning(f"用户名 '{username}' 暂未实际创建")
-                print_info("用户创建功能将在 Step 4 中实现")
-                print_info("届时将校验唯一性并持久化到数据库")
-            else:
-                print_info("已取消")
         except (KeyboardInterrupt, EOFError):
             print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        username = username.strip()
+        if not username:
+            print_info("已取消（用户名为空）")
+            await self._press_enter_to_continue()
+            return
+
+        # 2. 可选：选择默认模型
+        default_model = "gpt-4o-mini"
+        config = self._state.get("config")
+        if config:
+            available = config.available_models
+            if available:
+                print()
+                print_info("可选默认模型:")
+                for i, m in enumerate(available, 1):
+                    console.print(f"    [{Theme.MUTED}]{i}.[/{Theme.MUTED}] {m.get('name', '?')} [{Theme.MUTED}]({m.get('model', '?')})[/{Theme.MUTED}]")
+                print()
+                model_choice = await self._get_text_input("选择模型编号（直接回车使用默认 gpt-4o-mini）: ")
+                if model_choice.strip().isdigit():
+                    idx = int(model_choice.strip()) - 1
+                    if 0 <= idx < len(available):
+                        default_model = available[idx].get("model", "gpt-4o-mini")
+
+        # 3. 创建用户
+        try:
+            user = await user_mgr.create_user(username, default_model=default_model)
+        except ValueError as e:
+            print()
+            print_error(str(e))
+            await self._press_enter_to_continue()
+            return
+
+        # 4. 自动设置为当前用户
+        user_mgr.set_current_user(user)
+        print()
+        print_success(f"用户 '{username}' 创建成功，已自动切换为当前用户")
+        print_info(f"默认模型: {default_model}")
+        await self._press_enter_to_continue()
+
+    async def _switch_user(self) -> None:
+        """切换到其他已存在用户。
+
+        流程：
+        1. 加载全部用户列表
+        2. 排除当前用户（切换到自己无意义）
+        3. 用户按编号选择目标用户
+        4. 更新全局状态
+        """
+        console.clear()
+        print_header("切换用户", subtitle="切换到其他已存在的用户")
+
+        user_mgr = self._get_user_manager()
+        if user_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        # 1. 获取用户列表
+        try:
+            users = await user_mgr.list_users()
+        except Exception as e:
+            print_error(f"获取用户列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not users:
+            print_warning("暂无已注册用户，请先创建用户")
+            await self._press_enter_to_continue()
+            return
+
+        # 2. 过滤掉当前用户
+        current_id = user_mgr.get_current_user_id()
+        other_users = [u for u in users if u["id"] != current_id]
+
+        if not other_users:
+            print_info("只有当前一个用户，无需切换")
+            print_info("你可以创建新用户后再切换")
+            await self._press_enter_to_continue()
+            return
+
+        # 3. 展示可选用户列表
+        print()
+        console.print(f"  [{Theme.PRIMARY}]可切换的用户:[/{Theme.PRIMARY}]")
+        print()
+        for i, u in enumerate(other_users, 1):
+            created = u.get("created_at", "")
+            if isinstance(created, str):
+                created = created.replace("T", " ")[:16]
+            console.print(
+                f"    [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                f"[bold]{u['username']}[/bold]  "
+                f"[{Theme.MUTED}]模型: {u.get('default_model', '?')}  "
+                f"创建于: {created}[/{Theme.MUTED}]"
+            )
+
+        print()
+        valid_keys = [str(i) for i in range(1, len(other_users) + 1)] + ["0"]
+        choice = await self._get_choice(
+            f"选择要切换的用户 [1-{len(other_users)}, 0=取消]",
+            valid_keys=valid_keys,
+        )
+
+        if choice == "0":
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        # 4. 执行切换
+        idx = int(choice) - 1
+        target = other_users[idx]
+        old_username = user_mgr.get_current_username()
+        user_mgr.set_current_user(target)
+        print()
+        print_success(f"已从 '{old_username}' 切换到 '{target['username']}'")
+        print_info("会话上下文已重置（切换用户后需新建或加载会话）")
+        await self._press_enter_to_continue()
+
+    async def _delete_user(self) -> None:
+        """删除用户及其所有关联数据。
+
+        流程：
+        1. 加载全部用户列表
+        2. 用户按编号选择要删除的用户
+        3. 显示警告（级联删除的数据范围）
+        4. 二次确认：要求输入被删除用户的用户名
+        5. 执行删除
+        6. 若删除的是当前用户，自动清除状态
+        """
+        console.clear()
+        print_header("删除用户", subtitle="删除用户及其所有关联数据（需二次确认）")
+
+        user_mgr = self._get_user_manager()
+        if user_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        # 1. 获取用户列表
+        try:
+            users = await user_mgr.list_users()
+        except Exception as e:
+            print_error(f"获取用户列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not users:
+            print_warning("暂无已注册用户可删除")
+            await self._press_enter_to_continue()
+            return
+
+        # 2. 展示用户列表
+        print()
+        console.print(f"  [{Theme.PRIMARY}]选择要删除的用户:[/{Theme.PRIMARY}]")
+        print()
+        for i, u in enumerate(users, 1):
+            is_current = u["id"] == user_mgr.get_current_user_id()
+            tag = f" [{Theme.WARNING}](当前用户)[/{Theme.WARNING}]" if is_current else ""
+            created = u.get("created_at", "")
+            if isinstance(created, str):
+                created = created.replace("T", " ")[:16]
+            console.print(
+                f"    [{Theme.ERROR}]{i}.[/{Theme.ERROR}] "
+                f"[bold]{u['username']}[/bold]{tag}  "
+                f"[{Theme.MUTED}]创建于: {created}[/{Theme.MUTED}]"
+            )
+
+        print()
+        valid_keys = [str(i) for i in range(1, len(users) + 1)] + ["0"]
+        choice = await self._get_choice(
+            f"选择要删除的用户 [1-{len(users)}, 0=取消]",
+            valid_keys=valid_keys,
+        )
+
+        if choice == "0":
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        # 3. 确认目标用户
+        idx = int(choice) - 1
+        target = users[idx]
+
+        # 4. 警告 + 二次确认
+        print()
+        print_warning("⚠  此操作不可撤销！将永久删除以下数据：")
+        print()
+        console.print(f"    [{Theme.ERROR}]• 用户账号: {target['username']}[/{Theme.ERROR}]")
+        console.print(f"    [{Theme.ERROR}]• 该用户的所有会话及对话记录[/{Theme.ERROR}]")
+        console.print(f"    [{Theme.ERROR}]• 该用户的所有自定义预设[/{Theme.ERROR}]")
+        console.print(f"    [{Theme.ERROR}]• 该用户的所有个人配置[/{Theme.ERROR}]")
+        print()
+
+        # 要求输入用户名来确认
+        print_warning(f"请输入用户名 '{target['username']}' 以确认删除（直接回车取消）:")
+        try:
+            confirmation = await self._get_text_input("确认: ")
+        except (KeyboardInterrupt, EOFError):
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        if confirmation.strip() != target["username"]:
+            print()
+            print_info("已取消（用户名不匹配）")
+            await self._press_enter_to_continue()
+            return
+
+        # 5. 执行删除
+        try:
+            success = await user_mgr.delete_user(target["id"])
+        except Exception as e:
+            print()
+            print_error(f"删除失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if success:
+            print()
+            print_success(f"用户 '{target['username']}' 及其所有关联数据已删除")
+            if target["id"] == user_mgr.get_current_user_id():
+                print_info("该用户为当前活跃用户，已自动清除登录状态")
+        else:
+            print_error(f"用户 '{target['username']}' 不存在或已被删除")
 
         await self._press_enter_to_continue()
 
-    async def _stub_switch_user(self) -> None:
-        """Stub: 切换用户。"""
-        console.clear()
-        print_header("切换用户", subtitle="Step 4 将实现完整的用户切换功能")
-        print_info("用户列表和切换功能将在 Step 4 中实现")
-        print_info("届时将展示所有已注册用户并可选择切换")
-        await self._press_enter_to_continue()
+    async def _list_users(self) -> None:
+        """显示所有已注册用户列表。
 
-    async def _stub_delete_user(self) -> None:
-        """Stub: 删除用户。"""
+        以 Rich 表格形式展示：
+        - 序号
+        - 用户名（当前用户加标记）
+        - 默认模型
+        - 创建时间
+        """
         console.clear()
-        print_header("删除用户", subtitle="Step 4 将实现用户删除功能")
-        print_warning("此操作将删除用户及其所有关联数据")
-        print_info("Step 4 将实现完整的二次确认和数据清理流程")
-        await self._press_enter_to_continue()
+        print_header("用户列表", subtitle="所有已注册用户")
 
-    async def _stub_list_users(self) -> None:
-        """Stub: 用户列表。"""
-        console.clear()
-        print_header("用户列表", subtitle="Step 4 将展示所有已注册用户")
-        print_info("用户列表功能将在 Step 4 与 SQLite 数据库对接中实现")
-        print_info("届时将以表格形式展示：用户名 / 默认模型 / 创建时间")
+        user_mgr = self._get_user_manager()
+        if user_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        # 获取用户列表
+        try:
+            users = await user_mgr.list_users()
+        except Exception as e:
+            print_error(f"获取用户列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not users:
+            print_warning("暂无已注册用户")
+            print_info("请在「创建新用户」中添加第一个用户")
+            await self._press_enter_to_continue()
+            return
+
+        # 构建表格数据
+        current_id = user_mgr.get_current_user_id()
+        columns = [
+            {"key": "用户名", "style": "bold"},
+            {"key": "默认模型", "style": Theme.MUTED},
+            {"key": "创建时间", "style": Theme.MUTED},
+            {"key": "状态", "style": Theme.HIGHLIGHT},
+        ]
+        rows = []
+        for u in users:
+            is_current = u["id"] == current_id
+            created = u.get("created_at", "")
+            if isinstance(created, str):
+                created = created.replace("T", " ")[:16]
+            rows.append([
+                u["username"],
+                u.get("default_model", "?"),
+                created,
+                "★ 当前用户" if is_current else "",
+            ])
+
+        print()
+        print_table("已注册用户", columns, rows, show_index=True)
+        print()
+        print_info(f"共 {len(users)} 个用户")
         await self._press_enter_to_continue()
 
     # ============================================================

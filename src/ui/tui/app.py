@@ -6,6 +6,7 @@ TUI 主应用 — 菜单路由、状态管理、主事件循环。
 2. 管理应用全局状态（当前用户、会话、模型等）
 3. 实现菜单路由（根据用户选择分发到对应视图）
 4. 维护主事件循环（显示菜单 → 执行操作 → 返回菜单）
+5. 管理存储后端和业务组件的生命周期
 
 设计模式：
 - 中介者模式：App 协调各视图，视图之间不直接通信
@@ -13,6 +14,8 @@ TUI 主应用 — 菜单路由、状态管理、主事件循环。
 
 依赖关系：
     App
+    ├── StorageBackend（数据持久化）
+    ├── UserManager（用户业务逻辑，Step 4）
     ├── MenuView（菜单渲染与交互）
     ├── ChatView（对话界面，Step 7 对接）
     └── state（共享状态字典）
@@ -31,28 +34,38 @@ class TUIApp:
     """TUI 主应用程序。
 
     负责 TUI 的全局状态管理和菜单路由。
-    在 Step 2 中提供完整的可交互菜单系统。
+    在 Step 4 中集成存储后端和用户管理。
 
     使用方式：
-        app = TUIApp(config_manager)
+        config = ConfigManager()
+        storage = await StorageFactory.create(config)
+        app = TUIApp(config_manager=config, storage=storage)
         await app.run()
 
     Attributes:
         config: ConfigManager 实例（全局配置）
+        storage: StorageBackend 实例（数据持久化）
         _state: 应用全局状态字典
         _menu_view: 菜单视图管理器
         _chat_view: 对话视图管理器
         _running: 主循环运行标志
     """
 
-    def __init__(self, config_manager: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        config_manager: Optional[Any] = None,
+        storage: Optional[Any] = None,
+    ) -> None:
         """初始化 TUI 应用。
 
         Args:
             config_manager: ConfigManager 实例，提供全局配置访问。
                            可选；未提供时，TUI 使用默认值。
+            storage: StorageBackend 实例，提供数据持久化。
+                     Step 4 起传入，用于用户管理等数据操作。
         """
         self.config = config_manager
+        self.storage = storage
 
         # ----- 全局共享状态 -----
         # state 字典是各视图之间的唯一通信通道
@@ -72,11 +85,19 @@ class TUIApp:
             "current_preset_name": None,
             # 配置引用（只读）
             "config": config_manager,
+            # 业务组件（Step 4+）
+            "user_manager": None,
         }
 
         # 初始化默认值（从配置中读取）
         if config_manager:
             self._state["current_model"] = config_manager.model_name
+
+        # ----- 业务组件 -----
+        # Step 4: 如果提供了存储后端，初始化用户管理器
+        if storage is not None:
+            from src.core.user_manager import UserManager
+            self._state["user_manager"] = UserManager(storage, self._state)
 
         # ----- 视图组件 -----
         self._menu_view = MenuView(self._state)
@@ -147,11 +168,18 @@ class TUIApp:
     async def shutdown(self) -> None:
         """优雅关闭应用。
 
-        保存状态、关闭连接、清理资源。
-        Step 2 中尚无需要持久化的资源，
-        后续步骤会在此添加存储后端关闭逻辑。
+        保存状态、关闭存储连接、清理资源。
         """
         self._running = False
+
+        # 关闭存储后端（释放数据库连接等资源）
+        if self.storage is not None:
+            try:
+                await self.storage.close()
+            except Exception as close_err:
+                # 关闭失败不应阻止程序退出
+                pass
+
         console.clear()
         print_header("感谢使用 LangChain Chat", subtitle="再见！")
         print()
