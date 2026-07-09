@@ -1,0 +1,232 @@
+"""
+TUI 主应用 — 菜单路由、状态管理、主事件循环。
+
+本模块是 TUI 层的大脑，负责：
+1. 初始化所有视图组件（MenuView、ChatView）
+2. 管理应用全局状态（当前用户、会话、模型等）
+3. 实现菜单路由（根据用户选择分发到对应视图）
+4. 维护主事件循环（显示菜单 → 执行操作 → 返回菜单）
+
+设计模式：
+- 中介者模式：App 协调各视图，视图之间不直接通信
+- 状态容器模式：state 字典作为唯一的状态真相源
+
+依赖关系：
+    App
+    ├── MenuView（菜单渲染与交互）
+    ├── ChatView（对话界面，Step 7 对接）
+    └── state（共享状态字典）
+"""
+
+import asyncio
+import sys
+from typing import Any, Dict, Optional
+
+from .widgets import console, print_error, print_header, print_info
+from .menu_view import MenuView
+from .chat_view import ChatView
+
+
+class TUIApp:
+    """TUI 主应用程序。
+
+    负责 TUI 的全局状态管理和菜单路由。
+    在 Step 2 中提供完整的可交互菜单系统。
+
+    使用方式：
+        app = TUIApp(config_manager)
+        await app.run()
+
+    Attributes:
+        config: ConfigManager 实例（全局配置）
+        _state: 应用全局状态字典
+        _menu_view: 菜单视图管理器
+        _chat_view: 对话视图管理器
+        _running: 主循环运行标志
+    """
+
+    def __init__(self, config_manager: Optional[Any] = None) -> None:
+        """初始化 TUI 应用。
+
+        Args:
+            config_manager: ConfigManager 实例，提供全局配置访问。
+                           可选；未提供时，TUI 使用默认值。
+        """
+        self.config = config_manager
+
+        # ----- 全局共享状态 -----
+        # state 字典是各视图之间的唯一通信通道
+        # 任何视图都可以读写 state，但约定：
+        #   - 读取：随时可以
+        #   - 写入：仅在自己的处理函数中写入自己的 key
+        self._state: Dict[str, Any] = {
+            # 当前用户
+            "current_user_id": None,
+            "current_username": None,
+            # 当前会话
+            "current_session_id": None,
+            "current_session_title": None,
+            # 当前设置
+            "current_model": None,
+            "current_preset_id": None,
+            "current_preset_name": None,
+            # 配置引用（只读）
+            "config": config_manager,
+        }
+
+        # 初始化默认值（从配置中读取）
+        if config_manager:
+            self._state["current_model"] = config_manager.model_name
+
+        # ----- 视图组件 -----
+        self._menu_view = MenuView(self._state)
+        self._chat_view = ChatView(self._state)
+
+        # ----- 运行状态 -----
+        self._running = False
+
+    # ============================================================
+    # 主循环
+    # ============================================================
+
+    async def run(self) -> None:
+        """启动 TUI 主事件循环。
+
+        循环流程：
+        1. 显示主菜单
+        2. 获取用户选择
+        3. 路由到对应子菜单或视图
+        4. 子菜单/视图返回后回到步骤 1
+        5. 用户选择"退出"时结束循环
+
+        异常处理：
+        - Ctrl+C → 优雅退出
+        - 未预期异常 → 显示错误并尝试恢复
+        """
+        self._running = True
+
+        # 显示欢迎画面
+        console.clear()
+        print_header(
+            "LangChain Chat",
+            subtitle="正在启动...",
+        )
+
+        try:
+            while self._running:
+                # 主菜单 → 返回操作指令
+                action = await self._menu_view.show_main_menu()
+
+                # 路由分发
+                await self._route(action)
+
+        except KeyboardInterrupt:
+            # 用户按下 Ctrl+C
+            console.print()
+            print_info("收到退出信号，正在退出...")
+        except Exception as e:
+            # 区分终端兼容性错误与其他未预期异常
+            error_type = type(e).__name__
+            if "Console" in error_type or "ScreenBuffer" in error_type:
+                # prompt_toolkit 在 Git Bash / Cygwin 等非标准终端中可能失败
+                print_error(
+                    "终端兼容性问题 — 当前终端不支持完整的控制台功能。\n"
+                    "  请尝试以下终端：\n"
+                    "  • cmd.exe（命令提示符）\n"
+                    "  • PowerShell\n"
+                    "  • Windows Terminal\n"
+                    "  • 或在 Git Bash 中使用: winpty uv run python src/main.py"
+                )
+            else:
+                # 其他未预期的异常：显示但不让程序崩溃
+                print_error(f"发生未预期错误: {e}")
+                console.print_exception(show_locals=False)
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self) -> None:
+        """优雅关闭应用。
+
+        保存状态、关闭连接、清理资源。
+        Step 2 中尚无需要持久化的资源，
+        后续步骤会在此添加存储后端关闭逻辑。
+        """
+        self._running = False
+        console.clear()
+        print_header("感谢使用 LangChain Chat", subtitle="再见！")
+        print()
+
+    # ============================================================
+    # 路由分发
+    # ============================================================
+
+    async def _route(self, action: str) -> None:
+        """根据主菜单选择分发到对应的子视图。
+
+        路由表：
+            user_menu    → 用户管理子菜单
+            session_menu → 会话管理子菜单
+            preset_menu  → 预设管理子菜单
+            start_chat   → 对话界面
+            settings     → 系统设置
+            exit         → 退出程序
+
+        Args:
+            action: 操作指令字符串（来自 MenuView.show_main_menu）
+        """
+        # ----- 路由映射表 -----
+        route_handlers = {
+            "user_menu":    self._handle_user_menu,
+            "session_menu": self._handle_session_menu,
+            "preset_menu":  self._handle_preset_menu,
+            "start_chat":   self._handle_chat,
+            "settings":     self._handle_settings,
+            "exit":         self._handle_exit,
+        }
+
+        handler = route_handlers.get(action)
+        if handler:
+            await handler()
+        else:
+            print_error(f"未知操作: {action}")
+
+    # ============================================================
+    # 路由处理函数
+    # ============================================================
+
+    async def _handle_user_menu(self) -> None:
+        """处理用户管理菜单。"""
+        await self._menu_view.show_user_menu()
+
+    async def _handle_session_menu(self) -> None:
+        """处理会话管理菜单。"""
+        await self._menu_view.show_session_menu()
+
+    async def _handle_preset_menu(self) -> None:
+        """处理预设管理菜单。"""
+        await self._menu_view.show_preset_menu()
+
+    async def _handle_chat(self) -> None:
+        """处理开始对话。
+
+        前置条件检查：必须已选择用户。
+        如果未选择用户，提示并返回主菜单。
+        """
+        if not self._state.get("current_username"):
+            console.clear()
+            print_header("开始对话", subtitle="前置条件检查")
+            print_error("请先在「用户管理」中创建或选择一个用户")
+            print_info("对话功能需要关联用户才能保存会话记录")
+            print()
+            await self._menu_view._press_enter_to_continue()
+            return
+
+        await self._chat_view.render()
+
+    async def _handle_settings(self) -> None:
+        """处理系统设置。"""
+        await self._menu_view.show_settings_menu()
+
+    async def _handle_exit(self) -> None:
+        """处理退出请求。"""
+        self._running = False
