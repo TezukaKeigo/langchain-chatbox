@@ -417,8 +417,8 @@ class MenuView:
             return
 
         # 2. 可选：选择默认模型
-        default_model = config.model_name if config else "deepseek-v4-flash"
         config = self._state.get("config")
+        default_model = config.model_name if config else "deepseek-v4-flash"
         if config:
             available = config.available_models
             if available:
