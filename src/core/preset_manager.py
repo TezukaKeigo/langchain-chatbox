@@ -63,21 +63,25 @@ class PresetManager:
     async def load_builtin_presets(self) -> int:
         """将 config/presets.yaml 中的内置预设同步到数据库。
 
-        幂等操作：如果数据库中已存在内置预设，跳过加载。
-        通过检查 is_builtin=True 的预设数量来判断是否已加载。
+        按名称逐条检查，仅创建数据库中不存在的预设。
+        这种逐条比对策略比「只要有 builtin 就全跳过」更健壮：
+        - 数据库中有残留旧预设时不会阻塞新预设的加载
+        - 后续在 YAML 中新增预设会自动同步
 
         Returns:
-            本次加载的预设数量（首次加载返回 4，后续返回 0）
+            本次新加载的预设数量
         """
-        # 检查是否已加载过内置预设
+        # 获取数据库中已有的内置预设名称集合
         existing_builtins = await self._storage.list_presets(user_id=None)
-        if existing_builtins:
-            return 0  # 已加载，跳过
+        existing_names = {p["name"] for p in existing_builtins}
 
-        # 从配置中读取内置预设并逐条创建
+        # 从配置中读取内置预设，跳过已存在的
         presets_config = self._config.presets
         count = 0
         for preset_data in presets_config:
+            if preset_data["name"] in existing_names:
+                continue  # 已存在，跳过
+
             await self._storage.create_preset(
                 name=preset_data["name"],
                 system_prompt=preset_data["system_prompt"],
