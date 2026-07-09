@@ -20,6 +20,12 @@
 
 import asyncio
 import sys
+from pathlib import Path
+
+# 将项目根目录加入 Python 搜索路径
+# 这使得 from src.xxx 和 from xxx（相对于 src/）两种导入方式都能正常工作
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 # 在 Windows 环境下强制使用 UTF-8 编码输出
 # 避免 emoji 等 Unicode 字符触发 GBK 编码错误
