@@ -86,10 +86,10 @@ class ChatView:
         print()
         print_info("按 Enter 返回主菜单...")
 
-        # 等待用户按键（模拟 input 的阻塞效果）
+        # 等待用户按键（使用 in_thread=True 避免嵌套事件循环）
         try:
             from prompt_toolkit import prompt
-            prompt("", default="")
+            prompt("", default="", in_thread=True)
         except (ImportError, EOFError):
             pass
 

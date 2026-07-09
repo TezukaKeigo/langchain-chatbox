@@ -20,7 +20,6 @@
 from typing import Any, Dict, List, Optional
 
 from prompt_toolkit import prompt as pt_prompt
-from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
 
 from .widgets import (
@@ -496,7 +495,7 @@ class MenuView:
 
         while True:
             try:
-                choice = await self._get_raw_input(
+                choice = self._get_raw_input(
                     prompt_text,
                     bottom_toolbar=toolbar_hint,
                 )
@@ -518,11 +517,11 @@ class MenuView:
             用户输入的文本
         """
         try:
-            return await self._get_raw_input(prompt_text)
+            return self._get_raw_input(prompt_text)
         except (KeyboardInterrupt, EOFError):
             return ""
 
-    async def _get_raw_input(
+    def _get_raw_input(
         self,
         prompt_text: str,
         bottom_toolbar: Optional[str] = None,
@@ -532,6 +531,11 @@ class MenuView:
         使用 prompt_toolkit 的 prompt() 函数替代 input()，
         提供历史记录、光标移动、粘贴等高级功能。
 
+        关键设计：传入 in_thread=True 参数，使 prompt_toolkit
+        在后台线程运行其事件循环，避免与主线程的 asyncio.run()
+        发生嵌套冲突（"asyncio.run() cannot be called from a
+        running event loop" 错误）。
+
         Args:
             prompt_text: 输入提示文字
             bottom_toolbar: 底部工具栏提示文字
@@ -540,10 +544,13 @@ class MenuView:
             用户输入的原始文本
         """
         try:
-            result = await pt_prompt(
+            # in_thread=True: prompt_toolkit 在后台线程创建独立事件循环
+            # 主线程阻塞等待，但不会触发嵌套 asyncio.run() 错误
+            result = pt_prompt(
                 f"{prompt_text}",
                 style=_MENU_STYLE,
                 bottom_toolbar=bottom_toolbar,
+                in_thread=True,
                 # 后续步骤可在此添加自动补全和历史记录
             )
             return str(result)
@@ -558,10 +565,12 @@ class MenuView:
         """
         print()
         try:
-            await pt_prompt(
+            # in_thread=True: 避免嵌套事件循环冲突（同 _get_raw_input 说明）
+            pt_prompt(
                 "按 Enter 继续...",
                 style=_MENU_STYLE,
                 default="",
+                in_thread=True,
             )
         except (EOFError, KeyboardInterrupt):
             pass
