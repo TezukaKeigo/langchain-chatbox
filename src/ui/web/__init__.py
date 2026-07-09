@@ -1,0 +1,1 @@
+"""WebUI 预留 — 后期通过 FastAPI + WebSocket 实现。"""

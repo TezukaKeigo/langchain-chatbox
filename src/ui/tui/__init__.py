@@ -1,0 +1,1 @@
+"""TUI 实现 — 基于 Rich + prompt_toolkit 的命令行交互界面。"""
