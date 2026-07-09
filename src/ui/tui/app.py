@@ -16,6 +16,7 @@ TUI 主应用 — 菜单路由、状态管理、主事件循环。
     App
     ├── StorageBackend（数据持久化）
     ├── UserManager（用户业务逻辑，Step 4）
+    ├── PresetManager（预设管理，Step 5）
     ├── MenuView（菜单渲染与交互）
     ├── ChatView（对话界面，Step 7 对接）
     └── state（共享状态字典）
@@ -35,6 +36,7 @@ class TUIApp:
 
     负责 TUI 的全局状态管理和菜单路由。
     在 Step 4 中集成存储后端和用户管理。
+    在 Step 5 中集成预设管理。
 
     使用方式：
         config = ConfigManager()
@@ -87,6 +89,8 @@ class TUIApp:
             "config": config_manager,
             # 业务组件（Step 4+）
             "user_manager": None,
+            # 业务组件（Step 5+）
+            "preset_manager": None,
         }
 
         # 初始化默认值（从配置中读取）
@@ -98,6 +102,13 @@ class TUIApp:
         if storage is not None:
             from src.core.user_manager import UserManager
             self._state["user_manager"] = UserManager(storage, self._state)
+
+        # Step 5: 初始化预设管理器
+        if storage is not None and config_manager is not None:
+            from src.core.preset_manager import PresetManager
+            self._state["preset_manager"] = PresetManager(
+                storage, self._state, config_manager
+            )
 
         # ----- 视图组件 -----
         self._menu_view = MenuView(self._state)
@@ -125,6 +136,18 @@ class TUIApp:
         - 未预期异常 → 显示错误并尝试恢复
         """
         self._running = True
+
+        # Step 5: 同步内置预设到数据库（幂等操作）
+        preset_mgr = self._state.get("preset_manager")
+        if preset_mgr is not None:
+            try:
+                loaded = await preset_mgr.load_builtin_presets()
+                if loaded > 0:
+                    # 仅在首次加载时打印提示（静默启动）
+                    pass
+            except Exception as e:
+                # 预设加载失败不阻止程序启动
+                pass
 
         # 显示欢迎画面
         console.clear()

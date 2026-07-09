@@ -11,15 +11,18 @@
 所有菜单使用统一的交互模式：
   显示选项列表 → 等待键盘输入 → 执行对应操作 → 返回结果
 
-当前状态（Step 4）：
+当前状态（Step 5）：
   用户管理（创建/切换/删除/列表）：已完整实现，对接 SQLite 数据库。
-  预设管理、会话管理：仍为 stub 占位，将在 Step 5-8 实现。
+  预设管理（浏览内置/自定义CRUD/选择切换）：已完整实现。
+  会话管理：仍为 stub 占位，将在 Step 7-8 实现。
 """
 
 from typing import Any, Dict, List, Optional
 
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.styles import Style
+
+from rich.panel import Panel
 
 from .widgets import (
     Theme,
@@ -264,8 +267,7 @@ class MenuView:
         """显示预设管理子菜单。
 
         包含系统内置预设浏览、用户自定义预设的管理。
-        Step 2 中所有操作均为 stub 占位，
-        完整实现将在 Step 5 完成。
+        Step 5 完整实现所有预设操作。
 
         Returns:
             子操作指令字符串，或 None 返回主菜单
@@ -301,14 +303,14 @@ class MenuView:
             if choice == "0":
                 break
 
-            stub_messages = {
-                "1": "系统内置预设浏览将在 Step 5 中实现。届时将展示：翻译助手、代码专家、创意写手、英语老师等角色",
-                "2": "个人自定义预设管理将在 Step 5 中实现",
-                "3": "新建自定义预设功能将在 Step 5 中实现",
-                "4": "选择预设功能将在 Step 5 中实现",
-            }
-            print_info(stub_messages[choice])
-            await self._press_enter_to_continue()
+            if choice == "1":
+                await self._browse_builtin_presets()
+            elif choice == "2":
+                await self._my_custom_presets()
+            elif choice == "3":
+                await self._create_custom_preset()
+            elif choice == "4":
+                await self._select_preset()
 
         return None
 
@@ -688,6 +690,500 @@ class MenuView:
         print_table("已注册用户", columns, rows, show_index=True)
         print()
         print_info(f"共 {len(users)} 个用户")
+        await self._press_enter_to_continue()
+
+    # ============================================================
+    # 预设管理 — 真实实现（Step 5）
+    # ============================================================
+
+    def _get_preset_manager(self):
+        """安全获取 PresetManager 实例。
+
+        Returns:
+            PresetManager 实例，或 None（未初始化时）
+        """
+        preset_mgr = self._state.get("preset_manager")
+        if preset_mgr is None:
+            print_error("预设管理器尚未初始化，请重启程序")
+        return preset_mgr
+
+    async def _browse_builtin_presets(self) -> None:
+        """浏览系统内置预设。
+
+        展示所有内置预设的详细信息：
+        - 名称和描述
+        - 系统提示词全文
+        用户可按编号查看详情或直接使用某个预设。
+        """
+        console.clear()
+        print_header("系统内置预设", subtitle="所有用户共享的预设角色")
+
+        preset_mgr = self._get_preset_manager()
+        if preset_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        # 获取仅内置预设
+        try:
+            builtins = await preset_mgr.list_presets(user_id=None)
+        except Exception as e:
+            print_error(f"获取内置预设失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not builtins:
+            print_warning("暂无内置预设")
+            print_info("请检查 config/presets.yaml 配置文件")
+            await self._press_enter_to_continue()
+            return
+
+        # 展示列表
+        print()
+        for i, p in enumerate(builtins, 1):
+            desc = p.get("description", "")
+            console.print(
+                f"  [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                f"[bold]{p['name']}[/bold]"
+            )
+            if desc:
+                console.print(f"     [{Theme.MUTED}]{desc}[/{Theme.MUTED}]")
+
+        print()
+        valid_keys = [str(i) for i in range(1, len(builtins) + 1)] + ["0"]
+        choice = await self._get_choice(
+            f"选择预设查看详情 [1-{len(builtins)}, 0=返回]",
+            valid_keys=valid_keys,
+        )
+
+        if choice == "0":
+            return
+
+        # 显示详情
+        idx = int(choice) - 1
+        preset = builtins[idx]
+
+        console.clear()
+        print_header(f"预设详情: {preset['name']}", subtitle=preset.get("description", ""))
+
+        # 系统提示词
+        system_prompt = preset.get("system_prompt", "")
+        console.print()
+        console.print(f"  [{Theme.PRIMARY}]系统提示词:[/{Theme.PRIMARY}]")
+        console.print()
+        # 用 Panel 展示长文本
+        from rich.text import Text
+        prompt_text = Text(system_prompt.strip())
+        console.print(Panel(
+            prompt_text,
+            border_style=Theme.MUTED,
+            padding=(1, 2),
+        ))
+
+        print()
+        print_info("内置预设不可编辑或删除，所有用户共享")
+        await self._press_enter_to_continue()
+
+    async def _my_custom_presets(self) -> None:
+        """管理个人自定义预设。
+
+        子菜单：
+        1. 查看预设详情
+        2. 编辑预设（名称/描述/系统提示词）
+        3. 删除预设
+
+        需要当前已选择用户。
+        """
+        preset_mgr = self._get_preset_manager()
+        if preset_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        current_user_id = self._state.get("current_user_id")
+        if not current_user_id:
+            print_warning("请先在「用户管理」中选择一个用户")
+            print_info("自定义预设属于个人，需要确定当前用户")
+            await self._press_enter_to_continue()
+            return
+
+        # 循环管理界面
+        while True:
+            console.clear()
+            print_header("我的自定义预设", subtitle="管理个人创建的预设角色")
+
+            try:
+                all_presets = await preset_mgr.list_presets(user_id=current_user_id)
+            except Exception as e:
+                print_error(f"获取预设列表失败: {e}")
+                await self._press_enter_to_continue()
+                return
+
+            # 过滤出自定义预设（非内置）
+            custom = [p for p in all_presets if not p.get("is_builtin")]
+
+            if not custom:
+                print_warning("暂无自定义预设")
+                print_info("你可以在「新建自定义预设」中创建专属角色设定")
+                print()
+                await self._press_enter_to_continue()
+                return
+
+            # 展示列表
+            print()
+            for i, p in enumerate(custom, 1):
+                desc = p.get("description", "")
+                updated = p.get("updated_at", "")
+                if isinstance(updated, str):
+                    updated = updated.replace("T", " ")[:16]
+                console.print(
+                    f"  [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                    f"[bold]{p['name']}[/bold]"
+                )
+                if desc:
+                    console.print(f"     [{Theme.MUTED}]{desc}[/{Theme.MUTED}]")
+                console.print(f"     [{Theme.MUTED}]更新于: {updated}[/{Theme.MUTED}]")
+
+            print()
+            valid_keys = [str(i) for i in range(1, len(custom) + 1)] + ["0"]
+            choice = await self._get_choice(
+                f"选择预设 [1-{len(custom)}, 0=返回]",
+                valid_keys=valid_keys,
+            )
+
+            if choice == "0":
+                return
+
+            idx = int(choice) - 1
+            preset = custom[idx]
+
+            # 操作子菜单
+            await self._custom_preset_actions(preset_mgr, preset)
+
+    async def _custom_preset_actions(
+        self, preset_mgr, preset: Dict[str, Any]
+    ) -> None:
+        """对单个自定义预设的操作子菜单。
+
+        Args:
+            preset_mgr: PresetManager 实例
+            preset: 当前操作的预设字典
+        """
+        while True:
+            console.clear()
+            print_header(f"预设: {preset['name']}", subtitle=preset.get("description", ""))
+
+            # 显示系统提示词摘要
+            system_prompt = preset.get("system_prompt", "")
+            preview = system_prompt[:120] + "..." if len(system_prompt) > 120 else system_prompt
+            console.print(Panel(
+                preview,
+                title="系统提示词",
+                border_style=Theme.MUTED,
+                padding=(1, 2),
+            ))
+
+            options = [
+                _opt("1", "查看完整提示词", ""),
+                _opt("2", "编辑预设", "修改名称/描述/系统提示词"),
+                _opt("3", "删除预设", "永久删除此自定义预设"),
+                _opt("0", "返回", ""),
+            ]
+
+            print()
+            print_menu_options(options)
+            print()
+
+            choice = await self._get_choice(
+                "请选择操作 [0-3]", valid_keys=["0", "1", "2", "3"]
+            )
+
+            if choice == "0":
+                return
+
+            if choice == "1":
+                # 查看完整提示词
+                console.clear()
+                print_header(f"提示词: {preset['name']}", subtitle="完整系统提示词")
+                from rich.text import Text
+                console.print(Panel(
+                    Text(system_prompt.strip()),
+                    border_style=Theme.MUTED,
+                    padding=(1, 2),
+                ))
+                print()
+                await self._press_enter_to_continue()
+
+            elif choice == "2":
+                # 编辑预设
+                await self._edit_custom_preset(preset_mgr, preset)
+                # 重新获取最新数据
+                updated = await preset_mgr.get_preset(preset["id"])
+                if updated:
+                    preset = updated
+                else:
+                    return  # 预设已被删除
+
+            elif choice == "3":
+                # 删除预设
+                await self._delete_custom_preset(preset_mgr, preset)
+                return  # 删除后返回上级
+
+    async def _edit_custom_preset(
+        self, preset_mgr, preset: Dict[str, Any]
+    ) -> None:
+        """编辑自定义预设。
+
+        允许修改名称、描述、系统提示词。
+        直接回车保留原值不修改。
+
+        Args:
+            preset_mgr: PresetManager 实例
+            preset: 要编辑的预设字典
+        """
+        console.clear()
+        print_header(f"编辑预设: {preset['name']}", subtitle="直接回车保留原值")
+
+        # 1. 修改名称
+        print_info(f"当前名称: {preset['name']}")
+        new_name = await self._get_text_input("新名称（直接回车保留）: ")
+        new_name = new_name.strip() if new_name else None
+
+        # 2. 修改描述
+        print()
+        print_info(f"当前描述: {preset.get('description', '（无）')}")
+        new_desc = await self._get_text_input("新描述（直接回车保留）: ")
+        new_desc = new_desc.strip() if new_desc else None
+
+        # 3. 修改系统提示词
+        print()
+        current_prompt = preset.get("system_prompt", "")
+        preview = current_prompt[:80] + "..." if len(current_prompt) > 80 else current_prompt
+        print_info(f"当前提示词: {preview}")
+        new_prompt = await self._get_text_input("新提示词（直接回车保留）: ")
+        new_prompt = new_prompt.strip() if new_prompt else None
+
+        # 如果全部为空，表示不修改
+        if new_name is None and new_desc is None and new_prompt is None:
+            print()
+            print_info("未做任何修改")
+            await self._press_enter_to_continue()
+            return
+
+        # 4. 执行更新
+        try:
+            await preset_mgr.update_preset(
+                preset["id"],
+                name=new_name,
+                description=new_desc,
+                system_prompt=new_prompt,
+            )
+            print()
+            print_success(f"预设 '{preset['name']}' 更新成功")
+        except ValueError as e:
+            print()
+            print_error(str(e))
+
+        await self._press_enter_to_continue()
+
+    async def _delete_custom_preset(
+        self, preset_mgr, preset: Dict[str, Any]
+    ) -> None:
+        """删除自定义预设。
+
+        Args:
+            preset_mgr: PresetManager 实例
+            preset: 要删除的预设字典
+        """
+        print()
+        print_warning(f"确认删除自定义预设 '{preset['name']}'？")
+        print_info("此操作不可撤销")
+
+        print()
+        confirm = await self._get_choice(
+            "输入 y 确认删除，n 取消",
+            valid_keys=["y", "n"],
+        )
+
+        if confirm == "n":
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        try:
+            await preset_mgr.delete_preset(preset["id"])
+            print()
+            print_success(f"预设 '{preset['name']}' 已删除")
+            # 如果删除的是当前选中的预设，清除状态
+            if preset["id"] == self._state.get("current_preset_id"):
+                preset_mgr.clear_preset()
+                print_info("该预设为当前使用预设，已自动清除选择")
+        except ValueError as e:
+            print()
+            print_error(str(e))
+
+        await self._press_enter_to_continue()
+
+    async def _create_custom_preset(self) -> None:
+        """新建自定义预设。
+
+        流程：
+        1. 输入预设名称
+        2. 输入描述（可选）
+        3. 输入系统提示词
+        4. 保存到数据库
+
+        需要当前已选择用户。
+        """
+        console.clear()
+        print_header("新建自定义预设", subtitle="创建专属的角色设定")
+
+        preset_mgr = self._get_preset_manager()
+        if preset_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        current_user_id = self._state.get("current_user_id")
+        if not current_user_id:
+            print_error("请先在「用户管理」中选择一个用户")
+            print_info("自定义预设属于个人，需要确定当前用户")
+            await self._press_enter_to_continue()
+            return
+
+        # 1. 输入名称
+        print_info("请输入预设名称（1-100 字符）")
+        name = await self._get_text_input("预设名称: ")
+        name = name.strip()
+        if not name:
+            print_info("已取消（名称为空）")
+            await self._press_enter_to_continue()
+            return
+
+        # 2. 输入描述
+        print()
+        print_info("请输入预设描述（可选，直接回车跳过）")
+        description = await self._get_text_input("描述: ")
+        description = description.strip()
+
+        # 3. 输入系统提示词
+        print()
+        print_info("请输入系统提示词（必填，定义 AI 的角色行为）")
+        print_info("提示：可以直接回车输入单行简短提示词")
+        system_prompt = await self._get_text_input("系统提示词: ")
+        system_prompt = system_prompt.strip()
+        if not system_prompt:
+            print_info("已取消（提示词为空）")
+            await self._press_enter_to_continue()
+            return
+
+        # 4. 创建
+        try:
+            preset = await preset_mgr.create_preset(
+                user_id=current_user_id,
+                name=name,
+                description=description,
+                system_prompt=system_prompt,
+            )
+            print()
+            print_success(f"自定义预设 '{preset['name']}' 创建成功")
+        except ValueError as e:
+            print()
+            print_error(str(e))
+
+        await self._press_enter_to_continue()
+
+    async def _select_preset(self) -> None:
+        """选择或取消预设。
+
+        流程：
+        1. 显示所有可见预设（内置 + 自定义）
+        2. 标注当前选中的预设
+        3. 用户按编号选择，或选择 0 取消使用预设
+        4. 更新全局状态
+        """
+        console.clear()
+        print_header("选择预设", subtitle="为当前会话选择一个角色预设")
+
+        preset_mgr = self._get_preset_manager()
+        if preset_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        current_user_id = self._state.get("current_user_id")
+        current_preset_id = self._state.get("current_preset_id")
+
+        # 获取所有可见预设
+        try:
+            all_presets = await preset_mgr.list_presets(user_id=current_user_id)
+        except Exception as e:
+            print_error(f"获取预设列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not all_presets:
+            print_warning("暂无可用预设")
+            print_info("请检查 config/presets.yaml 或创建自定义预设")
+            await self._press_enter_to_continue()
+            return
+
+        # 归类展示
+        builtins = [p for p in all_presets if p.get("is_builtin")]
+        customs = [p for p in all_presets if not p.get("is_builtin")]
+
+        print()
+        if builtins:
+            console.print(f"  [{Theme.PRIMARY}]── 系统内置预设 ──[/{Theme.PRIMARY}]")
+            for i, p in enumerate(builtins, 1):
+                marker = " ★" if p["id"] == current_preset_id else ""
+                console.print(
+                    f"  [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                    f"[bold]{p['name']}[/bold]{marker}"
+                    f"  [{Theme.MUTED}]{p.get('description', '')}[/{Theme.MUTED}]"
+                )
+            print()
+
+        if customs:
+            console.print(f"  [{Theme.PRIMARY}]── 自定义预设 ──[/{Theme.PRIMARY}]")
+            offset = len(builtins)
+            for i, p in enumerate(customs, offset + 1):
+                marker = " ★" if p["id"] == current_preset_id else ""
+                console.print(
+                    f"  [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                    f"[bold]{p['name']}[/bold]{marker}"
+                    f"  [{Theme.MUTED}]{p.get('description', '')}[/{Theme.MUTED}]"
+                )
+            print()
+
+        # 当前状态
+        current_name = self._state.get("current_preset_name")
+        if current_name:
+            print_info(f"当前使用: {current_name}")
+        else:
+            print_info("当前未使用预设")
+
+        print()
+        total = len(all_presets)
+        valid_keys = [str(i) for i in range(1, total + 1)] + ["0"]
+        choice = await self._get_choice(
+            f"选择预设 [1-{total}]，0=不使用预设",
+            valid_keys=valid_keys,
+        )
+
+        if choice == "0":
+            if current_preset_id:
+                preset_mgr.clear_preset()
+                print()
+                print_success("已取消预设选择")
+            else:
+                print()
+                print_info("当前未使用预设")
+        else:
+            idx = int(choice) - 1
+            selected = all_presets[idx]
+            preset_mgr.select_preset(selected)
+            print()
+            print_success(f"已选择预设: {selected['name']}")
+            tag = "内置" if selected.get("is_builtin") else "自定义"
+            print_info(f"类型: {tag}")
+
         await self._press_enter_to_continue()
 
     # ============================================================
