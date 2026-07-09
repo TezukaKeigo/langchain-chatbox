@@ -531,7 +531,7 @@ class MenuView:
         1. 加载全部用户列表
         2. 用户按编号选择要删除的用户
         3. 显示警告（级联删除的数据范围）
-        4. 二次确认：要求输入被删除用户的用户名
+        4. 二次确认：y/n 菜单选择确认
         5. 执行删除
         6. 若删除的是当前用户，自动清除状态
         """
@@ -588,7 +588,7 @@ class MenuView:
         idx = int(choice) - 1
         target = users[idx]
 
-        # 4. 警告 + 二次确认
+        # 4. 警告 + 二次确认（菜单选择方式，与主菜单同一套稳定输入机制）
         print()
         print_warning("⚠  此操作不可撤销！将永久删除以下数据：")
         print()
@@ -598,18 +598,18 @@ class MenuView:
         console.print(f"    [{Theme.ERROR}]• 该用户的所有个人配置[/{Theme.ERROR}]")
         print()
 
-        # 要求输入用户名来确认
-        print_warning(f"请输入用户名 '{target['username']}' 以确认删除（直接回车取消）:")
-        try:
-            confirmation = await self._get_text_input("确认: ")
-        except (KeyboardInterrupt, EOFError):
-            print_info("已取消")
-            await self._press_enter_to_continue()
-            return
+        # 使用 _get_choice（与菜单选择同一套输入机制），避免 _get_text_input 在 Windows 下
+        # 因 pt_prompt(in_thread=True) 返回值含不可见字符导致字符串匹配失败
+        print_warning(f"确认删除用户 '{target['username']}'？")
+        print()
+        confirm_choice = await self._get_choice(
+            f"输入 y 确认删除，n 取消",
+            valid_keys=["y", "n"],
+        )
 
-        if confirmation.strip() != target["username"]:
+        if confirm_choice == "n":
             print()
-            print_info("已取消（用户名不匹配）")
+            print_info("已取消")
             await self._press_enter_to_continue()
             return
 

@@ -96,7 +96,7 @@ class TUIApp:
         # ----- 业务组件 -----
         # Step 4: 如果提供了存储后端，初始化用户管理器
         if storage is not None:
-            from core.user_manager import UserManager
+            from src.core.user_manager import UserManager
             self._state["user_manager"] = UserManager(storage, self._state)
 
         # ----- 视图组件 -----
