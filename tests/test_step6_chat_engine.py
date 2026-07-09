@@ -186,38 +186,46 @@ async def test_chat_engine() -> bool:
     assert engine.last_tokens == 0
     print(f"  初始 Token: all=0")
 
-    # 模拟 _update_token_stats
-    engine._update_token_stats({
-        "token_usage": {
-            "prompt_tokens": 150,
-            "completion_tokens": 80,
-            "total_tokens": 230,
-        }
-    })
+    # 模拟 _update_token_stats — 使用 Mock 对象模拟 AIMessage
+    class MockMessage:
+        def __init__(self, usage_metadata=None, response_metadata=None):
+            self.usage_metadata = usage_metadata
+            self.response_metadata = response_metadata or {}
+
+    # 测试 usage_metadata 路径（新版 LangChain — DeepSeek 等）
+    engine._update_token_stats(MockMessage(
+        usage_metadata={"input_tokens": 150, "output_tokens": 80, "total_tokens": 230}
+    ))
     assert engine.last_prompt_tokens == 150
     assert engine.last_completion_tokens == 80
     assert engine.last_tokens == 230
     assert engine.total_prompt_tokens == 150
     assert engine.total_completion_tokens == 80
     assert engine.total_tokens == 230
-    print(f"  第一轮: prompt={engine.last_prompt_tokens}, completion={engine.last_completion_tokens}, total={engine.last_tokens}")
+    print(f"  第一轮(usage_metadata): prompt={engine.last_prompt_tokens}, completion={engine.last_completion_tokens}, total={engine.last_tokens}")
 
     # 第二轮
-    engine._update_token_stats({
-        "token_usage": {
-            "prompt_tokens": 200,
-            "completion_tokens": 120,
-            "total_tokens": 320,
-        }
-    })
+    engine._update_token_stats(MockMessage(
+        usage_metadata={"input_tokens": 200, "output_tokens": 120, "total_tokens": 320}
+    ))
     assert engine.last_prompt_tokens == 200
     assert engine.last_completion_tokens == 120
     assert engine.last_tokens == 320
     assert engine.total_prompt_tokens == 350  # 150 + 200
     assert engine.total_completion_tokens == 200  # 80 + 120
     assert engine.total_tokens == 550  # 230 + 320
-    print(f"  第二轮: prompt={engine.last_prompt_tokens}, completion={engine.last_completion_tokens}")
+    print(f"  第二轮(usage_metadata): prompt={engine.last_prompt_tokens}, completion={engine.last_completion_tokens}")
     print(f"  累计: prompt={engine.total_prompt_tokens}, completion={engine.total_completion_tokens}, total={engine.total_tokens}")
+
+    # 测试 response_metadata["token_usage"] 路径（OpenAI 旧格式）
+    engine.reset_token_stats()
+    engine._update_token_stats(MockMessage(
+        response_metadata={"token_usage": {"prompt_tokens": 50, "completion_tokens": 30, "total_tokens": 80}}
+    ))
+    assert engine.last_prompt_tokens == 50
+    assert engine.last_completion_tokens == 30
+    assert engine.total_tokens == 80
+    print(f"  response_metadata 路径: prompt={engine.last_prompt_tokens}, completion={engine.last_completion_tokens}")
 
     # reset_token_stats
     engine.reset_token_stats()

@@ -181,7 +181,8 @@ class ChatView:
 
             if user_input.lower() == "/clear":
                 self._engine.clear_history()
-                console.print()
+                console.clear()
+                self._print_chat_header(session, [])
                 print_info("对话历史已清空（会话记录仍保留在数据库中）")
                 console.print()
                 continue

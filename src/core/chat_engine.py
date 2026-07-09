@@ -343,27 +343,40 @@ class ChatEngine:
         """上一轮对话的总 token 消耗。"""
         return self._last_prompt_tokens + self._last_completion_tokens
 
-    def _update_token_stats(self, response_metadata: Dict[str, Any]) -> None:
-        """从 LLM 响应的 metadata 中提取 Token 用量并更新统计。
+    def _update_token_stats(self, message: Any) -> None:
+        """从 LLM 响应消息中提取 Token 用量并更新统计。
 
-        OpenAI 兼容 API 的标准响应格式中，token 信息位于
-        response_metadata["token_usage"] 中，包含：
-        - prompt_tokens
-        - completion_tokens
-        - total_tokens
+        兼容多种 Token 信息来源（按优先级）：
+        1. message.usage_metadata — 新版 LangChain 格式
+           {"input_tokens": N, "output_tokens": N, "total_tokens": N}
+        2. message.response_metadata["token_usage"] — OpenAI 标准格式
+           {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
 
         如果上游 API 不返回 token 信息（如部分本地模型），
         则所有统计值保持为 0。
 
         Args:
-            response_metadata: AIMessage.response_metadata 字典
+            message: AIMessage 或 AIMessageChunk 实例
         """
-        usage = response_metadata.get("token_usage", {})
-        if not usage:
-            return
+        prompt_tokens = 0
+        completion_tokens = 0
 
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
+        # 优先：新版 LangChain usage_metadata（DeepSeek / 多数 API 返回）
+        usage_md = getattr(message, "usage_metadata", None)
+        if usage_md:
+            prompt_tokens = usage_md.get("input_tokens", 0)
+            completion_tokens = usage_md.get("output_tokens", 0)
+
+        # 备选：response_metadata["token_usage"]（OpenAI 旧格式）
+        if prompt_tokens == 0 and completion_tokens == 0:
+            rm = getattr(message, "response_metadata", {}) or {}
+            token_usage = rm.get("token_usage", {})
+            if token_usage:
+                prompt_tokens = token_usage.get("prompt_tokens", 0)
+                completion_tokens = token_usage.get("completion_tokens", 0)
+
+        if prompt_tokens == 0 and completion_tokens == 0:
+            return
 
         self._last_prompt_tokens = prompt_tokens
         self._last_completion_tokens = completion_tokens
@@ -429,8 +442,8 @@ class ChatEngine:
         # 将 AI 回复添加到历史
         self._history.append(response)
 
-        # 提取 Token 统计
-        self._update_token_stats(response.response_metadata)
+        # 提取 Token 统计（从完整的 AIMessage 中读取）
+        self._update_token_stats(response)
 
         return {
             "content": response.content,
@@ -523,14 +536,16 @@ class ChatEngine:
             if stream_error is None:
                 # 成功：将完整 AI 回复添加到历史
                 ai_message = AIMessage(content=full_content)
-                # 尝试从最后一个 chunk 获取 response_metadata
-                if final_chunk and hasattr(final_chunk, "response_metadata"):
-                    ai_message.response_metadata = final_chunk.response_metadata
+                # 从最后一个有效 chunk 复制 metadata（含 Token 信息）
+                if final_chunk is not None:
+                    if hasattr(final_chunk, "response_metadata"):
+                        ai_message.response_metadata = final_chunk.response_metadata
+                    if hasattr(final_chunk, "usage_metadata"):
+                        ai_message.usage_metadata = final_chunk.usage_metadata
                 self._history.append(ai_message)
 
-                # 提取 Token 统计
-                if final_chunk and hasattr(final_chunk, "response_metadata"):
-                    self._update_token_stats(final_chunk.response_metadata)
+                # 提取 Token 统计（从完整的 AIMessage 中读取）
+                self._update_token_stats(ai_message)
 
         # 如果出错，在清理后抛出
         if stream_error is not None:
