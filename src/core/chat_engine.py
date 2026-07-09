@@ -519,7 +519,16 @@ class ChatEngine:
                 delta = chunk.content if hasattr(chunk, "content") else ""
                 if isinstance(delta, str) and delta:
                     full_content += delta
-                final_chunk = chunk
+
+                # 保存最后一个有意义的 chunk（含 Token 信息）
+                # 流式传输的最后一个 chunk 通常是空的，真正有用的在倒数第二个
+                um = getattr(chunk, "usage_metadata", None)
+                if um:
+                    final_chunk = chunk
+                elif not final_chunk and hasattr(chunk, "response_metadata"):
+                    rm = chunk.response_metadata or {}
+                    if rm.get("finish_reason"):
+                        final_chunk = chunk
 
                 yield {
                     "content": delta if isinstance(delta, str) else "",
