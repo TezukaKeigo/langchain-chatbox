@@ -61,7 +61,7 @@ class User(BaseModel):
     """
     id: str = Field(default_factory=_new_id, description="用户唯一标识")
     username: str = Field(..., min_length=1, max_length=50, description="用户名（全局唯一）")
-    default_model: str = Field(default="gpt-4o-mini", description="默认模型")
+    default_model: str = Field(default="deepseek-v4-flash", description="默认模型")
     default_preset_id: Optional[str] = Field(default=None, description="默认预设ID")
     created_at: datetime = Field(default_factory=_now, description="创建时间")
     updated_at: datetime = Field(default_factory=_now, description="更新时间")
@@ -87,7 +87,7 @@ class Session(BaseModel):
     id: str = Field(default_factory=_new_id, description="会话唯一标识")
     user_id: str = Field(..., description="所属用户ID")
     title: str = Field(default="新会话", max_length=200, description="会话标题")
-    model_name: str = Field(default="gpt-4o-mini", description="使用的模型名称")
+    model_name: str = Field(default="deepseek-v4-flash", description="使用的模型名称")
     preset_id: Optional[str] = Field(default=None, description="使用的预设ID")
     total_prompt_tokens: int = Field(default=0, ge=0, description="累计Prompt Token")
     total_completion_tokens: int = Field(default=0, ge=0, description="累计Completion Token")

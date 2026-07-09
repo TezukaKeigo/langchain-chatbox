@@ -64,7 +64,7 @@ PRESETS_YAML = _resolve_path("config") / "presets.yaml"
 
 class LLMConfig(BaseModel):
     """LLM 相关配置模型。"""
-    default_model: str = "gpt-4o-mini"
+    default_model: str = "deepseek-v4-flash"
     timeout: int = 60
     max_retries: int = 3
     streaming: bool = True
@@ -123,7 +123,7 @@ class ConfigManager:
         config = ConfigManager()
 
         # 访问 LLM 配置
-        print(config.get("llm", "default_model"))  # → "gpt-4o-mini"
+        print(config.get("llm", "default_model"))  # → "deepseek-v4-flash"
 
         # 使用属性快捷方式
         print(config.api_key)          # → 从 .env 加载的 API_KEY
@@ -329,7 +329,7 @@ class ConfigManager:
         env_model = self.get_env("MODEL_NAME")
         if env_model:
             return env_model
-        return str(self.get("llm", "default_model", default="gpt-4o-mini"))
+        return str(self.get("llm", "default_model", default="deepseek-v4-flash"))
 
     @property
     def llm_timeout(self) -> int:

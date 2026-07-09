@@ -8,7 +8,7 @@
 # ----- LLM 默认设置 -----
 llm:
   # 默认模型（.env 中的 MODEL_NAME 优先于此配置）
-  default_model: "gpt-4o-mini"
+  default_model: "deepseek-v4-flash"
 
   # API 调用超时（秒）
   timeout: 60
@@ -21,18 +21,15 @@ llm:
 
   # 支持的模型列表（用于运行时切换）
   available_models:
-    - name: "gpt-4o-mini"
-      provider: "openai"
-      description: "OpenAI GPT-4o Mini — 快速、性价比最优"
-    - name: "gpt-4o"
-      provider: "openai"
-      description: "OpenAI GPT-4o — 最强推理能力"
-    - name: "deepseek-chat"
+    - name: "deepseek-v4-flash"
       provider: "deepseek"
-      description: "DeepSeek V3 — 国产高性价比"
-    - name: "deepseek-reasoner"
-      provider: "deepseek"
-      description: "DeepSeek R1 — 深度推理"
+      description: "DeepSeek V4 Flash — 默认模型"
+    - name: "kimi 2.6"
+      provider: "moonshot"
+      description: "Kimi 2.6 — Moonshot 出品"
+    - name: "qwen-plus"
+      provider: "alibaba"
+      description: "Qwen-Plus — 阿里云通义千问"
 
 # ----- 存储配置 -----
 # 切换存储后端：只需修改 storage.type 字段

@@ -417,7 +417,7 @@ class MenuView:
             return
 
         # 2. 可选：选择默认模型
-        default_model = "gpt-4o-mini"
+        default_model = config.model_name if config else "deepseek-v4-flash"
         config = self._state.get("config")
         if config:
             available = config.available_models
@@ -425,13 +425,13 @@ class MenuView:
                 print()
                 print_info("可选默认模型:")
                 for i, m in enumerate(available, 1):
-                    console.print(f"    [{Theme.MUTED}]{i}.[/{Theme.MUTED}] {m.get('name', '?')} [{Theme.MUTED}]({m.get('model', '?')})[/{Theme.MUTED}]")
+                    console.print(f"    [{Theme.MUTED}]{i}.[/{Theme.MUTED}] {m.get('name', '?')} [{Theme.MUTED}]({m.get('description', '')})[/{Theme.MUTED}]")
                 print()
-                model_choice = await self._get_text_input("选择模型编号（直接回车使用默认 gpt-4o-mini）: ")
+                model_choice = await self._get_text_input(f"选择模型编号（直接回车使用默认 {default_model}）: ")
                 if model_choice.strip().isdigit():
                     idx = int(model_choice.strip()) - 1
                     if 0 <= idx < len(available):
-                        default_model = available[idx].get("model", "gpt-4o-mini")
+                        default_model = available[idx].get("name", default_model)
 
         # 3. 创建用户
         try:
