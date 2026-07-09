@@ -1,139 +1,462 @@
 """
 对话视图 — TUI 聊天界面的核心交互组件。
 
-职责：
-- 展示对话记录（用户消息 + AI 回复）
-- 处理用户输入（单行/多行）
-- 流式输出 AI 回复（逐 token 渲染）
-- 显示 Token 用量统计
+本模块负责：
+1. 展示对话记录（历史消息 + 实时流式输出）
+2. 处理用户输入（单行 Enter 发送，Alt+Enter 多行模式）
+3. 流式渲染 AI 回复（逐 token 打字机效果）
+4. 每轮对话后自动保存到数据库
+5. 显示 Token 用量统计（本轮 + 累计）
+6. 首条消息自动生成会话标题
 
-当前状态（Step 2）：
-  本模块为骨架占位，提供基本的对话框架和方法签名。
-  实际的 LLM 对话功能将在 Step 6（对话引擎）和
-  Step 7（TUI 对话对接）中实现。
+当前状态（Step 7）：
+  核心里程碑 — 完整的流式多轮对话功能已实现。
 
-实现细节：
-  - 使用 prompt_toolkit 获取高质量用户输入
-  - 使用 Rich 进行 Markdown 渲染和流式输出
-  - 支持多行输入（用户需要时可切换到多行模式）
+交互约定：
+  - 输入消息后按 Enter 发送
+  - Alt+Enter 或 Esc+Enter 进入多行编辑模式
+  - 输入 /exit 或 /quit 退出对话
+  - 输入 /new 开始新会话
+  - 输入 /clear 清空当前会话历史
+  - Ctrl+C 中断当前 AI 回复
+
+设计原则：
+  - ChatView 只负责界面渲染和用户交互
+  - 对话逻辑由 ChatEngine 处理
+  - 持久化由 SessionManager 处理
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
+from prompt_toolkit import prompt as pt_prompt
+from prompt_toolkit.styles import Style as PTStyle
+from rich.panel import Panel
+from rich.text import Text
+
+from .widgets import (
+    Theme,
+    console,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+    truncate,
+)
+
+if TYPE_CHECKING:
+    from src.core.chat_engine import ChatEngine
+    from src.core.session_manager import SessionManager
+
+
+# ============================================================
+# prompt_toolkit 样式
+# ============================================================
+
+_CHAT_INPUT_STYLE = PTStyle.from_dict({
+    "prompt": "bold #00ff00",
+    "": "#ffffff",
+    "bottom-toolbar": "bg:#222222 #888888",
+})
+
+
+# ============================================================
+# ChatView
+# ============================================================
 
 class ChatView:
     """对话视图 — TUI 聊天的界面管理器。
 
-    Step 2 当前为 stub 占位实现。
-    完整功能在 Step 6-7 中实现。
+    提供完整的对话交互体验：
+    - 历史消息回显
+    - 流式 AI 输出
+    - 自动持久化
+    - Token 统计展示
 
     Attributes:
-        state: 共享的应用状态字典（当前用户、会话等）
+        _state: 共享的应用状态字典
+        _engine: ChatEngine 实例（由外部注入）
+        _session_mgr: SessionManager 实例（由外部注入）
     """
 
     def __init__(self, state: Dict[str, Any]) -> None:
         """初始化对话视图。
 
         Args:
-            state: 应用全局状态字典，包含：
-                - current_user_id: 当前用户 ID
-                - current_username: 当前用户名
-                - current_session_id: 当前会话 ID
-                - current_session_title: 当前会话标题
-                - current_model: 当前使用的模型
-                - current_preset_id: 当前使用的预设 ID
+            state: 应用全局状态字典
         """
         self._state = state
 
-    async def render(self) -> None:
-        """渲染对话界面主循环。
+    # ============================================================
+    # 主渲染入口
+    # ============================================================
 
-        当前为占位实现 — 打印提示信息。
-        完整实现将在 Step 7 完成，届时会：
-        1. 显示对话历史
-        2. 等待用户输入
-        3. 调用 ChatEngine 进行流式对话
-        4. 实时渲染 AI 回复
-        5. 显示 Token 用量
-        6. 自动保存消息到数据库
+    async def render(self, engine: "ChatEngine", session_mgr: "SessionManager") -> None:
+        """渲染对话界面并启动主循环。
+
+        这是对话视图的唯一入口。由 App._handle_chat() 调用。
+
+        流程：
+        1. 获取或创建会话
+        2. 加载历史消息（如有）
+        3. 打印对话头部信息
+        4. 进入「输入 → 流式输出 → 保存」循环
+        5. 用户退出时返回
+
+        Args:
+            engine: 对话引擎实例（已配置系统提示词）
+            session_mgr: 会话管理器实例
         """
-        from .widgets import console, print_header, print_info
+        self._engine = engine
+        self._session_mgr = session_mgr
 
-        console.clear()
-        print_header(
-            "开始对话",
-            subtitle="Step 7 将在此实现完整的实时流式对话功能",
+        user_id = self._state["current_user_id"]
+        model_name = self._state.get("current_model", "unknown")
+        preset_id = self._state.get("current_preset_id")
+
+        # Step 1: 获取或创建会话
+        session = await session_mgr.get_or_create_session(
+            user_id=user_id,
+            model_name=model_name,
+            preset_id=preset_id,
         )
+        session_id = session["id"]
 
-        # 检查前置条件：是否有当前用户
-        current_user = self._state.get("current_username")
-        if not current_user:
-            print_info("请先在「用户管理」中创建或选择一个用户。")
-            return
+        # Step 2: 加载历史消息
+        messages = await session_mgr.load_messages(session_id)
+        is_new_session = len(messages) == 0
 
-        # 显示当前上下文信息
-        session_title = self._state.get("current_session_title", "（无活跃会话）")
-        model = self._state.get("current_model", "未设置")
-        preset_name = self._state.get("current_preset_name", "无")
+        # 将历史消息加载到引擎（实现多轮对话上下文）
+        if messages:
+            engine.load_history(messages)
 
-        print_info(f"当前用户: {current_user}")
-        print_info(f"当前会话: {session_title}")
-        print_info(f"使用模型: {model}")
-        print_info(f"角色预设: {preset_name}")
-        print()
-        print_info("对话功能将在 Step 7（核心里程碑）中实现")
-        print_info("届时支持多轮流式对话、Token 统计、自动保存")
-        print()
-        print_info("按 Enter 返回主菜单...")
+        # 同步引擎的 Token 统计与会话记录
+        session_info = await session_mgr.get_session_info(session_id)
+        if session_info:
+            saved_prompt = session_info.get("total_prompt_tokens", 0)
+            saved_completion = session_info.get("total_completion_tokens", 0)
+            if saved_prompt > 0 or saved_completion > 0:
+                engine._total_prompt_tokens = saved_prompt
+                engine._total_completion_tokens = saved_completion
 
-        # 等待用户按键（使用 in_thread=True 避免嵌套事件循环）
+        # Step 3: 打印对话界面头部
+        self._print_chat_header(session, messages)
+
+        # Step 4: 主对话循环
         try:
-            from prompt_toolkit import prompt
-            prompt("", default="", in_thread=True)
-        except (ImportError, EOFError):
-            pass
+            await self._chat_loop(session, is_new_session)
+        finally:
+            self._engine = None
+            self._session_mgr = None
 
     # ============================================================
-    # 预留接口 — 后续步骤实现
+    # 对话循环
     # ============================================================
 
-    async def append_user_message(self, content: str) -> None:
-        """添加用户消息到对话视图（预留）。
+    async def _chat_loop(self, session: Dict[str, Any], is_new_session: bool) -> None:
+        """主对话循环：输入 → 流式输出 → 保存。
 
         Args:
-            content: 用户输入的消息内容
+            session: 当前会话数据字典
+            is_new_session: 是否为新会话（用于判断是否需要自动标题）
         """
-        pass
+        session_id = session["id"]
 
-    async def append_ai_message_start(self) -> None:
-        """开始 AI 消息输出（预留）。"""
-        pass
+        while True:
+            # 获取用户输入
+            user_input = await self._get_user_input()
 
-    async def append_ai_chunk(self, chunk: str) -> None:
-        """追加 AI 消息的流式片段（预留）。
+            if user_input is None:
+                break
+
+            user_input = user_input.strip()
+
+            # 特殊命令处理
+            if user_input.lower() in ("/exit", "/quit"):
+                print_info("退出对话，返回主菜单...")
+                break
+
+            if user_input.lower() == "/new":
+                await self._handle_new_session()
+                return
+
+            if user_input.lower() == "/clear":
+                self._engine.clear_history()
+                console.print()
+                print_info("对话历史已清空（会话记录仍保留在数据库中）")
+                console.print()
+                continue
+
+            if not user_input:
+                continue
+
+            # --- 自动标题（仅新会话的首条消息） ---
+            if is_new_session and self._engine.message_count == 0:
+                await self._session_mgr.auto_title(session_id, user_input)
+                session["title"] = self._state.get("current_session_title", session["title"])
+                is_new_session = False
+
+            # --- 显示 AI 回复标签 ---
+            console.print()
+            self._print_role_label("AI", Theme.AI_ROLE)
+            console.print()
+
+            # --- 流式调用 ChatEngine ---
+            full_response = ""
+
+            try:
+                async for chunk in self._engine.chat_stream(user_input):
+                    if chunk["done"]:
+                        self._print_token_stats(
+                            round_prompt=chunk["prompt_tokens"],
+                            round_completion=chunk["completion_tokens"],
+                            round_total=chunk["total_tokens"],
+                            total_prompt=self._engine.total_prompt_tokens,
+                            total_completion=self._engine.total_completion_tokens,
+                            total_all=self._engine.total_tokens,
+                        )
+                    else:
+                        console.print(chunk["content"], end="", highlight=False)
+                        full_response += chunk["content"]
+
+                console.print()
+
+            except KeyboardInterrupt:
+                console.print()
+                print_warning("AI 回复已被中断")
+                if full_response:
+                    from langchain_core.messages import AIMessage
+                    self._engine._history.append(AIMessage(content=full_response))
+
+            except Exception as e:
+                console.print()
+                print_error(f"LLM 调用失败: {e}")
+                continue
+
+            # --- 自动保存本轮对话 ---
+            if full_response:
+                try:
+                    await self._session_mgr.auto_save_turn(
+                        session_id=session_id,
+                        user_message=user_input,
+                        ai_response=full_response,
+                        prompt_tokens=self._engine.last_prompt_tokens,
+                        completion_tokens=self._engine.last_completion_tokens,
+                    )
+                except Exception as save_err:
+                    print_error(f"消息保存失败: {save_err}")
+
+            console.print()
+
+    # ============================================================
+    # 会话操作
+    # ============================================================
+
+    async def _handle_new_session(self) -> None:
+        """创建新会话并在当前界面中开始。"""
+        console.print()
+        print_info("创建新会话...")
+        self._engine.reset()
+        self._session_mgr.clear_current_session()
+        console.print()
+        print_success("已切换到新会话")
+        console.print()
+
+    # ============================================================
+    # 界面渲染辅助
+    # ============================================================
+
+    def _print_chat_header(
+        self,
+        session: Dict[str, Any],
+        messages: list,
+    ) -> None:
+        """打印对话界面的头部信息。
 
         Args:
-            chunk: 单个 token 文本
+            session: 当前会话数据字典
+            messages: 历史消息列表
         """
-        pass
+        console.clear()
 
-    async def append_ai_message_end(self) -> None:
-        """结束 AI 消息输出（预留）。"""
-        pass
+        username = self._state.get("current_username", "未知用户")
+        model = self._state.get("current_model", "unknown")
+        preset = self._state.get("current_preset_name") or "无"
+        session_title = session.get("title", "新会话")
 
-    async def show_token_stats(
+        # 标题面板 — 使用 Text 对象避免 Rich markup 注入
+        content = Text()
+        content.append("LangChain Chat", style="bold " + Theme.PRIMARY)
+        content.append("\n用户: ", style=Theme.MUTED)
+        content.append(username, style=Theme.HIGHLIGHT)
+        content.append(" | 模型: ", style=Theme.MUTED)
+        content.append(model, style=Theme.HIGHLIGHT)
+        content.append(" | 预设: ", style=Theme.MUTED)
+        content.append(preset, style=Theme.HIGHLIGHT)
+        content.append("\n会话: ", style=Theme.MUTED)
+        content.append(session_title, style=Theme.HIGHLIGHT)
+
+        panel = Panel(
+            content,
+            border_style=Theme.PRIMARY,
+            padding=(1, 2),
+        )
+        console.print(panel)
+
+        # 操作提示 — 使用 Text 对象
+        hints = Text()
+        hints.append("Enter 发送", style=Theme.MUTED)
+        hints.append(" | /exit 退出", style=Theme.MUTED)
+        hints.append(" | /new 新会话", style=Theme.MUTED)
+        hints.append(" | /clear 清屏", style=Theme.MUTED)
+        console.print(hints)
+        console.print()
+
+        # 显示历史消息数量
+        if messages:
+            info = Text()
+            info.append("  i ", style=Theme.MUTED)
+            info.append(f"已加载 {len(messages)} 条历史消息", style=Theme.MUTED)
+            console.print(info)
+            console.print()
+            self._print_history_summary(messages)
+
+    def _print_history_summary(self, messages: list) -> None:
+        """回显历史消息摘要。
+
+        Args:
+            messages: 历史消息列表
+        """
+        recent = messages[-6:] if len(messages) > 6 else messages
+
+        # 分隔线 — 使用 Text 对象避免 f-string + Rich markup 括号冲突
+        sep = Text()
+        sep.append("  ")
+        sep.append(f"── 历史消息（最近 {len(recent)} 条）──", style=Theme.MUTED)
+        console.print(sep)
+
+        for msg in recent:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "human":
+                self._print_chat_bubble("你", content, Theme.USER_ROLE)
+            elif role == "ai":
+                self._print_chat_bubble("AI", truncate(content, 120), Theme.AI_ROLE)
+
+        footer = Text()
+        footer.append("  ")
+        footer.append("── 继续对话 ──", style=Theme.MUTED)
+        console.print(footer)
+        console.print()
+
+    def _print_chat_bubble(self, sender: str, content: str, color: str) -> None:
+        """打印一条聊天气泡。
+
+        Args:
+            sender: 发送者标签
+            content: 消息内容
+            color: 标签颜色
+        """
+        label = Text()
+        label.append("  [", style=Theme.MUTED)
+        label.append(sender, style="bold " + color)
+        label.append("] ", style=Theme.MUTED)
+        label.append(truncate(content.replace("\n", " "), 150), style=Theme.MUTED)
+        console.print(label)
+
+    @staticmethod
+    def _print_role_label(role: str, color: str) -> None:
+        """打印发送者角色标签。
+
+        Args:
+            role: 角色名称
+            color: 标签颜色
+        """
+        label = Text()
+        label.append("  [", style=Theme.MUTED)
+        label.append(role, style="bold " + color)
+        label.append("] ", style=Theme.MUTED)
+        console.print(label)
+
+    def _print_token_stats(
         self,
         round_prompt: int,
         round_completion: int,
+        round_total: int,
         total_prompt: int,
         total_completion: int,
+        total_all: int,
     ) -> None:
-        """显示 Token 用量统计（预留）。
+        """打印 Token 用量统计。
 
         Args:
             round_prompt: 本轮 prompt tokens
             round_completion: 本轮 completion tokens
-            total_prompt: 会话累计 prompt tokens
-            total_completion: 会话累计 completion tokens
+            round_total: 本轮总 tokens
+            total_prompt: 累计 prompt tokens
+            total_completion: 累计 completion tokens
+            total_all: 累计总 tokens
         """
-        pass
+        console.print()
+        stats = Text()
+        stats.append("  ", style=Theme.MUTED)
+        stats.append("── Token 统计 ──", style=Theme.MUTED)
+        if round_total > 0:
+            stats.append(
+                f"\n  本轮: prompt={round_prompt} completion={round_completion} "
+                f"合计={round_total}",
+                style=Theme.MUTED,
+            )
+        stats.append(
+            f"\n  累计: prompt={total_prompt} completion={total_completion} "
+            f"合计={total_all}",
+            style=Theme.MUTED,
+        )
+        console.print(stats)
+
+    # ============================================================
+    # 用户输入
+    # ============================================================
+
+    async def _get_user_input(self) -> Optional[str]:
+        """获取用户输入。
+
+        使用 prompt_toolkit 提供高质量输入体验：
+        - Enter 发送消息
+        - Ctrl+C 取消当前输入并询问退出
+        - Ctrl+D 退出对话
+
+        Returns:
+            用户输入文本；EOF/Ctrl+C 确认退出时返回 None
+        """
+        session_title = self._state.get("current_session_title", "新会话")
+
+        try:
+            user_input = pt_prompt(
+                [("class:prompt", "  你 > ")],
+                style=_CHAT_INPUT_STYLE,
+                multiline=False,
+                bottom_toolbar=(
+                    "  [Enter] 发送  [/exit] 退出  [/new] 新会话  [/clear] 清屏"
+                    f"    会话: {session_title}"
+                ),
+                in_thread=True,
+            )
+            return user_input
+
+        except KeyboardInterrupt:
+            console.print()
+            try:
+                confirm = pt_prompt(
+                    [("class:prompt", "  确认退出对话? (y/n) > ")],
+                    style=_CHAT_INPUT_STYLE,
+                    default="n",
+                    in_thread=True,
+                )
+                if confirm.strip().lower() == "y":
+                    return None
+                return ""
+            except (KeyboardInterrupt, EOFError):
+                return None
+
+        except EOFError:
+            return None

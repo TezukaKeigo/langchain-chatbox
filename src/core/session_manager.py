@@ -1,0 +1,360 @@
+"""
+会话管理器 — 会话生命周期管理（创建/加载/保存/标题生成）。
+
+本模块负责会话级的业务逻辑：
+1. 自动创建会话（首次进入对话时）
+2. 每轮对话后自动保存消息到数据库
+3. 首条消息自动生成会话标题
+4. 加载历史会话的消息记录
+5. 更新会话的 Token 累计统计
+6. 新建会话（清空上下文重新开始）
+
+职责边界：
+- SessionManager：会话的 CRUD 和持久化
+- ChatEngine：LLM 调用和内存中的消息历史
+- ChatView：TUI 界面渲染和用户交互
+
+设计原则：
+- 与 UserManager / PresetManager 风格一致，通过 state 字典通信
+- 所有数据库操作通过 StorageBackend 接口，不直接耦合 SQLite
+- Token 统计由 ChatEngine 提供，SessionManager 负责持久化
+
+使用方式：
+    session_mgr = SessionManager(storage, state, config)
+    session = await session_mgr.get_or_create_session(user_id, model)
+    await session_mgr.auto_save_turn(session_id, user_msg, ai_msg, tokens)
+"""
+
+from typing import Any, Dict, List, Optional
+
+from src.storage.base import StorageBackend
+
+
+class SessionManager:
+    """会话管理器 — 封装会话生命周期的全部业务逻辑。
+
+    在存储层的基础上叠加：
+    - 会话自动创建（懒初始化）
+    - 消息自动持久化
+    - 标题自动生成
+    - Token 累计更新
+
+    Attributes:
+        _storage: 存储后端实例
+        _state: 应用全局状态字典
+        _config: ConfigManager 实例
+    """
+
+    def __init__(
+        self,
+        storage: StorageBackend,
+        state: Dict[str, Any],
+        config: Any,
+    ) -> None:
+        """初始化会话管理器。
+
+        Args:
+            storage: 已初始化的存储后端实例
+            state: 应用全局状态字典
+            config: ConfigManager 实例
+        """
+        self._storage = storage
+        self._state = state
+        self._config = config
+
+    # ============================================================
+    # 会话创建与获取
+    # ============================================================
+
+    async def get_or_create_session(
+        self,
+        user_id: str,
+        model_name: Optional[str] = None,
+        preset_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """获取当前会话，不存在则自动创建。
+
+        优先级：
+        1. 如果 state 中已有 current_session_id，验证其存在后返回
+        2. 否则创建新会话
+
+        Args:
+            user_id: 所属用户 ID
+            model_name: 使用的模型名称（默认从 config 读取）
+            preset_id: 使用的预设 ID（可选）
+
+        Returns:
+            Session 数据字典
+        """
+        if model_name is None:
+            model_name = self._config.model_name
+
+        # 尝试使用已有会话
+        existing_id = self._state.get("current_session_id")
+        if existing_id:
+            session = await self._storage.get_session(existing_id)
+            if session is not None:
+                return session
+
+        # 创建新会话
+        session = await self._storage.create_session(
+            user_id=user_id,
+            title="新会话",
+            model_name=model_name,
+            preset_id=preset_id,
+        )
+
+        # 更新全局状态
+        self._state["current_session_id"] = session["id"]
+        self._state["current_session_title"] = session["title"]
+
+        return session
+
+    async def create_new_session(
+        self,
+        user_id: str,
+        model_name: Optional[str] = None,
+        preset_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """强制创建新会话（不清空旧会话数据，只是开始新的）。
+
+        旧会话保留在数据库中，可通过会话列表随时加载。
+
+        Args:
+            user_id: 所属用户 ID
+            model_name: 使用的模型名称
+            preset_id: 使用的预设 ID（可选）
+
+        Returns:
+            新创建的 Session 数据字典
+        """
+        if model_name is None:
+            model_name = self._config.model_name
+
+        session = await self._storage.create_session(
+            user_id=user_id,
+            title="新会话",
+            model_name=model_name,
+            preset_id=preset_id,
+        )
+
+        self._state["current_session_id"] = session["id"]
+        self._state["current_session_title"] = session["title"]
+
+        return session
+
+    # ============================================================
+    # 消息保存
+    # ============================================================
+
+    async def save_user_message(
+        self,
+        session_id: str,
+        content: str,
+    ) -> Dict[str, Any]:
+        """保存用户消息到数据库。
+
+        Args:
+            session_id: 所属会话 ID
+            content: 用户输入文本
+
+        Returns:
+            Message 数据字典
+        """
+        return await self._storage.add_message(
+            session_id=session_id,
+            role="human",
+            content=content,
+            prompt_tokens=0,
+            completion_tokens=0,
+        )
+
+    async def save_ai_message(
+        self,
+        session_id: str,
+        content: str,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+    ) -> Dict[str, Any]:
+        """保存 AI 回复消息到数据库。
+
+        Args:
+            session_id: 所属会话 ID
+            content: AI 回复文本
+            prompt_tokens: 本轮 prompt token 消耗
+            completion_tokens: 本轮 completion token 消耗
+
+        Returns:
+            Message 数据字典
+        """
+        return await self._storage.add_message(
+            session_id=session_id,
+            role="ai",
+            content=content,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    async def auto_save_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        ai_response: str,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+    ) -> None:
+        """完整保存一轮对话（用户消息 + AI 回复），并更新会话 Token 累计。
+
+        这是一个便捷方法，等价于依次调用：
+        1. save_user_message()
+        2. save_ai_message()
+        3. _accumulate_tokens()
+
+        Args:
+            session_id: 所属会话 ID
+            user_message: 用户输入文本
+            ai_response: AI 回复文本
+            prompt_tokens: 本轮 prompt token 消耗
+            completion_tokens: 本轮 completion token 消耗
+        """
+        # 保存用户消息
+        await self.save_user_message(session_id, user_message)
+
+        # 保存 AI 回复
+        await self.save_ai_message(
+            session_id, ai_response,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+        # 更新会话 Token 累计
+        if prompt_tokens > 0 or completion_tokens > 0:
+            await self._accumulate_tokens(session_id, prompt_tokens, completion_tokens)
+
+    async def _accumulate_tokens(
+        self,
+        session_id: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> None:
+        """累加会话的 Token 计数。
+
+        从数据库读取当前累计值，加上本轮消耗后写回。
+
+        Args:
+            session_id: 会话 ID
+            prompt_tokens: 本轮 prompt token 增量
+            completion_tokens: 本轮 completion token 增量
+        """
+        session = await self._storage.get_session(session_id)
+        if session is None:
+            return
+
+        new_prompt = session.get("total_prompt_tokens", 0) + prompt_tokens
+        new_completion = session.get("total_completion_tokens", 0) + completion_tokens
+
+        await self._storage.update_session(
+            session_id,
+            total_prompt_tokens=new_prompt,
+            total_completion_tokens=new_completion,
+        )
+
+    # ============================================================
+    # 标题自动生成
+    # ============================================================
+
+    async def auto_title(self, session_id: str, first_message: str) -> str:
+        """从首条用户消息自动生成会话标题。
+
+        规则：
+        - 截取前 N 个字符（N 由 config.session.title_max_length 决定）
+        - 超出部分用 "..." 替代
+        - 去除换行符
+
+        Args:
+            session_id: 会话 ID
+            first_message: 首条用户消息文本
+
+        Returns:
+            生成的标题字符串
+        """
+        max_len = self._config.session_title_max_length
+
+        # 清理文本：去换行、去首尾空白
+        cleaned = first_message.replace("\n", " ").replace("\r", " ").strip()
+
+        if len(cleaned) <= max_len:
+            title = cleaned
+        else:
+            title = cleaned[:max_len] + "..."
+
+        # 更新数据库
+        await self._storage.update_session(session_id, title=title)
+
+        # 更新全局状态
+        self._state["current_session_title"] = title
+
+        return title
+
+    # ============================================================
+    # 消息历史
+    # ============================================================
+
+    async def load_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """加载会话的所有历史消息。
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            消息字典列表，按时间正序排列
+        """
+        return await self._storage.list_messages_by_session(session_id)
+
+    # ============================================================
+    # 会话信息
+    # ============================================================
+
+    async def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """获取会话详情。
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            Session 数据字典；不存在时返回 None
+        """
+        return await self._storage.get_session(session_id)
+
+    async def get_total_tokens(self, session_id: str) -> Dict[str, int]:
+        """获取会话的累计 Token 统计。
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            {"prompt": int, "completion": int, "total": int}
+        """
+        session = await self._storage.get_session(session_id)
+        if session is None:
+            return {"prompt": 0, "completion": 0, "total": 0}
+
+        prompt = session.get("total_prompt_tokens", 0)
+        completion = session.get("total_completion_tokens", 0)
+        return {
+            "prompt": prompt,
+            "completion": completion,
+            "total": prompt + completion,
+        }
+
+    # ============================================================
+    # 状态清理
+    # ============================================================
+
+    def clear_current_session(self) -> None:
+        """清除当前会话状态（不删除数据库记录）。
+
+        用于"新建会话"或"返回主菜单"时清理状态。
+        """
+        self._state["current_session_id"] = None
+        self._state["current_session_title"] = None

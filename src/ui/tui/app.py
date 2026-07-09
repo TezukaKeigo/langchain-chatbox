@@ -91,6 +91,9 @@ class TUIApp:
             "user_manager": None,
             # 业务组件（Step 5+）
             "preset_manager": None,
+            # 业务组件（Step 7+）
+            "session_manager": None,
+            "chat_engine": None,
         }
 
         # 初始化默认值（从配置中读取）
@@ -107,6 +110,13 @@ class TUIApp:
         if storage is not None and config_manager is not None:
             from src.core.preset_manager import PresetManager
             self._state["preset_manager"] = PresetManager(
+                storage, self._state, config_manager
+            )
+
+        # Step 7: 初始化会话管理器
+        if storage is not None and config_manager is not None:
+            from src.core.session_manager import SessionManager
+            self._state["session_manager"] = SessionManager(
                 storage, self._state, config_manager
             )
 
@@ -260,8 +270,14 @@ class TUIApp:
     async def _handle_chat(self) -> None:
         """处理开始对话。
 
+        Step 7 核心里程碑：
+        1. 创建 ChatEngine 实例
+        2. 加载当前用户的预设（如有）
+        3. 获取或创建会话
+        4. 加载历史消息
+        5. 进入对话循环（输入 → 流式输出 → 保存）
+
         前置条件检查：必须已选择用户。
-        如果未选择用户，提示并返回主菜单。
         """
         if not self._state.get("current_username"):
             console.clear()
@@ -272,7 +288,39 @@ class TUIApp:
             await self._menu_view._press_enter_to_continue()
             return
 
-        await self._chat_view.render()
+        # 检查 API Key
+        if not self.config or not self.config.api_key:
+            console.clear()
+            print_header("开始对话", subtitle="配置检查")
+            print_error("未检测到 API Key")
+            print_info("请在 .env 文件中配置 API_KEY 后重试")
+            print_info("参考 .env.example 文件进行配置")
+            print()
+            await self._menu_view._press_enter_to_continue()
+            return
+
+        from src.core.chat_engine import ChatEngine
+
+        session_mgr = self._state.get("session_manager")
+
+        # 创建对话引擎
+        engine = ChatEngine(self.config, self._state)
+
+        # 加载当前选中的预设（如有）
+        preset_id = self._state.get("current_preset_id")
+        if preset_id:
+            try:
+                preset = await self.storage.get_preset(preset_id)
+                if preset:
+                    engine.set_system_prompt(preset["system_prompt"])
+            except Exception:
+                pass  # 预设加载失败不阻止对话
+
+        try:
+            await self._chat_view.render(engine, session_mgr)
+        except Exception as e:
+            console.print()
+            print_error(f"对话异常: {e}")
 
     async def _handle_settings(self) -> None:
         """处理系统设置。"""
