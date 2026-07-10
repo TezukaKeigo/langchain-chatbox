@@ -187,6 +187,14 @@ class ChatView:
                 console.print()
                 continue
 
+            if user_input.lower() == "/model":
+                await self._switch_model_in_chat()
+                console.clear()
+                self._print_chat_header(session, messages=[])
+                print_info("模型已切换，可以继续对话")
+                console.print()
+                continue
+
             if not user_input:
                 continue
 
@@ -262,6 +270,99 @@ class ChatView:
         print_success("已切换到新会话")
         console.print()
 
+    async def _switch_model_in_chat(self) -> None:
+        """在对话中切换 LLM 模型（Step 10）。
+
+        从配置的 available_models 中展示可选模型，
+        用户选择后更新引擎和全局状态。
+        切换后保留对话历史，使用新模型继续对话。
+        """
+        from prompt_toolkit import prompt as pt_prompt
+        from prompt_toolkit.styles import Style as PTStyle
+
+        config = self._state.get("config")
+        if config is None:
+            print_error("配置管理器尚未初始化")
+            return
+
+        available = config.available_models
+        if not available:
+            print_warning("未配置可用模型列表")
+            return
+
+        current_model = self._state.get("current_model", "")
+
+        # 展示可用模型
+        console.print()
+        info = Text()
+        info.append("  i ", style=Theme.MUTED)
+        info.append("可用模型列表（输入编号切换，直接回车取消）:", style=Theme.MUTED)
+        console.print(info)
+
+        for i, m in enumerate(available, 1):
+            name = m.get("name", "?")
+            desc = m.get("description", "")
+            is_current = name == current_model
+            marker = " ★ 当前" if is_current else ""
+            console.print(
+                f"    [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                f"[bold]{name}[/bold]{marker}"
+                f"  [{Theme.MUTED}]{desc}[/{Theme.MUTED}]"
+            )
+
+        console.print()
+
+        # 获取用户选择
+        valid_keys = [str(i) for i in range(1, len(available) + 1)] + [""]
+        _CHAT_MODEL_STYLE = PTStyle.from_dict({
+            "prompt": "bold #ff00ff",
+            "": "#ffffff",
+        })
+
+        try:
+            choice = pt_prompt(
+                [("class:prompt", f"  选择模型 [1-{len(available)}] > ")],
+                style=_CHAT_MODEL_STYLE,
+                default="",
+                in_thread=True,
+            )
+        except (KeyboardInterrupt, EOFError):
+            return
+
+        choice = choice.strip()
+        if not choice:
+            print_info("已取消")
+            return
+
+        if choice not in valid_keys:
+            print_error(f"无效选择: {choice}")
+            return
+
+        idx = int(choice) - 1
+        selected = available[idx]
+        new_model = selected.get("name", "")
+
+        if new_model == current_model:
+            print_info(f"已经是当前模型: {new_model}")
+            return
+
+        # 更新状态和引擎
+        old_model = current_model
+        self._state["current_model"] = new_model
+
+        # 更新引擎的模型配置
+        if hasattr(self._engine, "_current_model"):
+            self._engine._current_model = new_model
+            # 重新创建 LLM 实例以使用新模型的 API 配置
+            if hasattr(self._engine, "_create_llm"):
+                try:
+                    self._engine._llm = self._engine._create_llm(new_model)
+                except Exception:
+                    pass  # 将在下次对话时延迟创建
+
+        print_success(f"模型已切换: '{old_model}' → '{new_model}'")
+        print_info("对话历史已保留，下一轮对话使用新模型")
+
     # ============================================================
     # 界面渲染辅助
     # ============================================================
@@ -309,6 +410,7 @@ class ChatView:
         hints.append(" | /exit 退出", style=Theme.MUTED)
         hints.append(" | /new 新会话", style=Theme.MUTED)
         hints.append(" | /clear 清屏", style=Theme.MUTED)
+        hints.append(" | /model 切换模型", style=Theme.MUTED)
         console.print(hints)
         console.print()
 
@@ -437,7 +539,7 @@ class ChatView:
                 style=_CHAT_INPUT_STYLE,
                 multiline=False,
                 bottom_toolbar=(
-                    "  [Enter] 发送  [/exit] 退出  [/new] 新会话  [/clear] 清屏"
+                    "  [Enter] 发送  [/exit] 退出  [/new] 新会话  [/clear] 清屏  [/model] 切换模型"
                     f"    会话: {session_title}"
                 ),
                 in_thread=True,

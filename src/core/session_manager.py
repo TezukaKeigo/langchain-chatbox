@@ -431,6 +431,107 @@ class SessionManager:
         self._state["current_session_title"] = session.get("title", "新会话")
 
     # ============================================================
+    # 会话导出（Step 10）
+    # ============================================================
+
+    async def export_session(
+        self,
+        session_id: str,
+        username: str,
+    ) -> str:
+        """导出会话为 Markdown 文件。
+
+        将指定会话的全部消息格式化为易读的 Markdown 文档，
+        包含会话元信息（标题、模型、时间、消息数），
+        按时间正序排列所有消息。
+
+        Args:
+            session_id: 会话 ID
+            username: 用户名（用于路径模板中 {username} 占位符）
+
+        Returns:
+            导出文件的绝对路径
+
+        Raises:
+            ValueError: 会话不存在
+        """
+        import os
+        from datetime import date
+
+        # 1. 获取会话信息
+        session = await self._storage.get_session(session_id)
+        if session is None:
+            raise ValueError(f"会话不存在: {session_id}")
+
+        # 2. 获取所有消息
+        messages = await self._storage.list_messages_by_session(session_id)
+
+        # 3. 构建 Markdown 内容
+        title = session.get("title", "新会话")
+        model = session.get("model_name", "unknown")
+        created = session.get("created_at", "")
+        today = date.today().strftime("%Y-%m-%d")
+
+        md_lines: List[str] = []
+        md_lines.append(f"# {title}")
+        md_lines.append("")
+        md_lines.append(f"- **模型**: {model}")
+        md_lines.append(f"- **导出日期**: {today}")
+        md_lines.append(f"- **创建时间**: {created}")
+        md_lines.append(f"- **消息数**: {len(messages)}")
+        md_lines.append("")
+        md_lines.append("---")
+        md_lines.append("")
+
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            msg_time = msg.get("created_at", "")
+
+            if role == "human":
+                md_lines.append("### 👤 用户")
+            elif role == "ai":
+                md_lines.append("### 🤖 AI")
+            elif role == "system":
+                md_lines.append("### ⚙️ 系统")
+            else:
+                md_lines.append(f"### {role}")
+
+            md_lines.append("")
+            md_lines.append(content)
+            md_lines.append("")
+            if msg_time:
+                md_lines.append(f"*{msg_time}*")
+            md_lines.append("")
+            md_lines.append("---")
+            md_lines.append("")
+
+        md_content = "\n".join(md_lines)
+
+        # 4. 构建文件路径（清理文件名中的非法字符）
+        path_template = self._config.export_path_template
+        safe_title = "".join(
+            c if c.isalnum() or c in "_- " else "_" for c in title
+        )[:50]
+        safe_title = safe_title.strip().replace(" ", "_")
+        if not safe_title:
+            safe_title = "untitled"
+
+        file_path = path_template.format(
+            username=username,
+            session_title=safe_title,
+            date=today,
+        )
+
+        # 5. 确保目录存在并写入文件
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+
+        return os.path.abspath(file_path)
+
+    # ============================================================
     # 消息搜索（Step 9）
     # ============================================================
 

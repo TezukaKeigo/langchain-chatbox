@@ -239,6 +239,7 @@ class MenuView:
                 _opt("4", "重命名会话", "修改会话标题"),
                 _opt("5", "删除会话", "删除指定会话及其所有消息"),
                 _opt("6", "搜索消息", "在所有历史消息中搜索关键词"),
+                _opt("7", "导出会话", "将会话导出为 Markdown 文件"),
                 _opt("0", "返回主菜单", ""),
             ]
 
@@ -249,7 +250,7 @@ class MenuView:
             print()
 
             choice = await self._get_choice(
-                "请选择操作 [0-6]", valid_keys=["0", "1", "2", "3", "4", "5", "6"]
+                "请选择操作 [0-7]", valid_keys=["0", "1", "2", "3", "4", "5", "6", "7"]
             )
 
             if choice == "0":
@@ -271,6 +272,8 @@ class MenuView:
                 await self._delete_session()
             elif choice == "6":
                 await self._search_messages()
+            elif choice == "7":
+                await self._export_session()
 
     # ============================================================
     # 预设管理子菜单
@@ -368,8 +371,7 @@ class MenuView:
                 break
 
             if choice == "1":
-                print_info("模型切换功能将在 Step 10（导出+模型切换）中实现")
-                await self._press_enter_to_continue()
+                await self._switch_model()
             elif choice == "2":
                 await self._show_config_info()
             elif choice == "3":
@@ -1027,6 +1029,64 @@ class MenuView:
                 print_info("该会话为当前活跃会话，已自动清除状态")
         else:
             print_error(f"会话 '{title}' 不存在或已被删除")
+
+        await self._press_enter_to_continue()
+
+    # ============================================================
+    # 会话导出（Step 10）
+    # ============================================================
+
+    async def _export_session(self) -> None:
+        """导出会话为 Markdown 文件。
+
+        流程：
+        1. 列出当前用户的所有会话
+        2. 用户选择要导出的会话
+        3. 调用 SessionManager.export_session() 导出
+        4. 显示导出文件路径
+        """
+        console.clear()
+        print_header("导出会话", subtitle="将会话导出为 Markdown 文件")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        user_id = self._state["current_user_id"]
+        username = self._state.get("current_username", "unknown")
+
+        # 1. 获取会话列表
+        try:
+            sessions = await session_mgr.list_user_sessions(user_id)
+        except Exception as e:
+            print_error(f"获取会话列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not sessions:
+            print_warning("暂无历史会话可导出")
+            print_info("开始对话后，会话将自动创建")
+            await self._press_enter_to_continue()
+            return
+
+        # 2. 选择要导出的会话
+        session = await self._pick_session_from_list(sessions, "选择要导出的会话")
+        if session is None:
+            return
+
+        # 3. 执行导出
+        print()
+        print_info(f"正在导出会话: {session.get('title', '新会话')} ...")
+        try:
+            file_path = await session_mgr.export_session(session["id"], username)
+            print()
+            print_success(f"会话已导出到: {file_path}")
+            # 显示统计信息
+            messages = await session_mgr.load_messages(session["id"])
+            print_info(f"共导出 {len(messages)} 条消息")
+        except Exception as e:
+            print_error(f"导出失败: {e}")
 
         await self._press_enter_to_continue()
 
@@ -1713,6 +1773,85 @@ class MenuView:
             tag = "内置" if selected.get("is_builtin") else "自定义"
             print_info(f"类型: {tag}")
 
+        await self._press_enter_to_continue()
+
+    # ============================================================
+    # 系统设置 — 模型切换（Step 10）
+    # ============================================================
+
+    async def _switch_model(self) -> None:
+        """切换全局默认模型。
+
+        从 config.yaml 的 available_models 列表中展示所有可用模型，
+        用户选择后更新全局状态中的 current_model。
+        切换后立即生效（下次对话使用新模型）。
+        """
+        console.clear()
+        print_header("切换模型", subtitle="在可用模型列表中选择不同的 LLM 模型")
+
+        config = self._state.get("config")
+        if config is None:
+            print_warning("配置管理器尚未初始化")
+            await self._press_enter_to_continue()
+            return
+
+        available = config.available_models
+        if not available:
+            print_warning("未配置可用模型列表")
+            print_info("请在 config.yaml 的 llm.available_models 中添加模型")
+            await self._press_enter_to_continue()
+            return
+
+        current_model = self._state.get("current_model", "")
+
+        # 展示可用模型列表
+        print()
+        for i, m in enumerate(available, 1):
+            name = m.get("name", "?")
+            provider = m.get("provider", "?")
+            desc = m.get("description", "")
+            is_current = name == current_model
+            marker = f" [{Theme.HIGHLIGHT}]★ 当前[/{Theme.HIGHLIGHT}]" if is_current else ""
+
+            console.print(
+                f"  [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                f"[bold]{name}[/bold]{marker}"
+                f"  [{Theme.MUTED}]({provider})[/{Theme.MUTED}]"
+            )
+            if desc:
+                console.print(f"     [{Theme.MUTED}]{desc}[/{Theme.MUTED}]")
+
+        print()
+        print_info(f"当前模型: {current_model or '未设置'}")
+        print()
+
+        valid_keys = [str(i) for i in range(1, len(available) + 1)] + ["0"]
+        choice = await self._get_choice(
+            f"选择模型 [1-{len(available)}, 0=取消]",
+            valid_keys=valid_keys,
+        )
+
+        if choice == "0":
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        # 更新当前模型
+        idx = int(choice) - 1
+        selected = available[idx]
+        new_model = selected.get("name", "")
+        old_model = current_model
+
+        if new_model == old_model:
+            print()
+            print_info(f"已经是当前模型: {new_model}")
+            await self._press_enter_to_continue()
+            return
+
+        self._state["current_model"] = new_model
+        print()
+        print_success(f"模型已切换: '{old_model}' → '{new_model}'")
+        print_info("下次对话将使用新模型（会话内对话不影响）")
         await self._press_enter_to_continue()
 
     # ============================================================
