@@ -294,13 +294,24 @@ class TUIApp:
             await self._menu_view._press_enter_to_continue()
             return
 
-        # 检查 API Key
-        if not self.config or not self.config.api_key:
+        # 检查 API Key（优先使用当前模型专属 key，回退到全局 key）
+        if self.config:
+            current_model = self._state.get("current_model", self.config.model_name)
+            model_cfg = self.config.get_model_config(current_model)
+            if not model_cfg["api_key"]:
+                console.clear()
+                print_header("开始对话", subtitle="配置检查")
+                print_error(f"模型 '{current_model}' 的 API Key 未配置")
+                print_info("请在 .env 文件中配置对应的 API_KEY 环境变量")
+                print_info("参考 .env.example 文件进行配置")
+                print()
+                await self._menu_view._press_enter_to_continue()
+                return
+
+        if not self.config:
             console.clear()
             print_header("开始对话", subtitle="配置检查")
-            print_error("未检测到 API Key")
-            print_info("请在 .env 文件中配置 API_KEY 后重试")
-            print_info("参考 .env.example 文件进行配置")
+            print_error("配置管理器未初始化")
             print()
             await self._menu_view._press_enter_to_continue()
             return

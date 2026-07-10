@@ -20,15 +20,23 @@ llm:
   streaming: true
 
   # 支持的模型列表（用于运行时切换）
+  # 每个模型可独立配置 API Key（env_key）和 Base URL（api_base_url）
+  # 若 env_key 对应的环境变量未设置，回退到全局 API_KEY
   available_models:
     - name: "deepseek-v4-flash"
       provider: "deepseek"
+      env_key: "DEEPSEEK_API_KEY"
+      api_base_url: "https://api.deepseek.com/v1"
       description: "DeepSeek V4 Flash — 默认模型"
     - name: "kimi 2.6"
       provider: "moonshot"
+      env_key: "KIMI_API_KEY"
+      api_base_url: "https://api.moonshot.cn/v1"
       description: "Kimi 2.6 — Moonshot 出品"
     - name: "qwen-plus"
       provider: "alibaba"
+      env_key: "QWEN_API_KEY"
+      api_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       description: "Qwen-Plus — 阿里云通义千问"
 
 # ----- 存储配置 -----

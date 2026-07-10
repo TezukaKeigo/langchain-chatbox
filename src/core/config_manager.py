@@ -351,6 +351,45 @@ class ConfigManager:
         """可用模型列表（用于模型切换）。"""
         return list(self.get("llm", "available_models", default=[]))
 
+    def get_model_config(self, model_name: str) -> Dict[str, str]:
+        """获取指定模型的 API Key 和 Base URL。
+
+        查找规则（按优先级）：
+        1. 从 config.yaml 的 available_models 中找到对应条目
+        2. 读取条目中 env_key 指定的环境变量作为 api_key
+        3. 读取条目中的 api_base_url 作为 base_url
+        4. 若 api_key 为空，回退到全局 API_KEY
+        5. 若 api_base_url 为空，回退到全局 API_BASE_URL
+
+        Args:
+            model_name: 模型名称（如 "deepseek-v4-flash"）
+
+        Returns:
+            {"api_key": str, "api_base": str}
+        """
+        # 默认值（全局回退）
+        api_key = self.api_key
+        api_base = self.api_base_url
+
+        # 查找模型专属配置
+        for m in self.available_models:
+            if m.get("name") == model_name:
+                # 尝试从模型专属环境变量读取 API Key
+                env_key_name = m.get("env_key", "")
+                if env_key_name:
+                    specific_key = self.get_env(env_key_name, "")
+                    if specific_key:
+                        api_key = specific_key
+
+                # 读取模型专属 Base URL
+                model_api_base = m.get("api_base_url", "")
+                if model_api_base:
+                    api_base = model_api_base
+
+                break
+
+        return {"api_key": api_key, "api_base": api_base}
+
     # ----------------------------------------------------------
     # 属性快捷访问 — 存储相关
     # ----------------------------------------------------------

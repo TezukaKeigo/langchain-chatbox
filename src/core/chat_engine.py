@@ -134,14 +134,19 @@ class ChatEngine:
         """
         model = model_name or self._current_model
 
-        if not self._config.api_key:
+        # Step 10: 根据模型名称获取专属 API Key 和 Base URL
+        # 若该模型未单独配置，自动回退到全局 API_KEY / API_BASE_URL
+        model_cfg = self._config.get_model_config(model)
+
+        if not model_cfg["api_key"]:
             raise ConfigError(
-                "API Key 未配置。请编辑 .env 文件，设置 API_KEY=你的密钥"
+                f"模型 '{model}' 的 API Key 未配置。"
+                "请编辑 .env 文件，设置对应的 API_KEY 环境变量"
             )
 
         return ChatOpenAI(
-            base_url=self._config.api_base_url,
-            api_key=self._config.api_key,
+            base_url=model_cfg["api_base"],
+            api_key=model_cfg["api_key"],
             model=model,
             streaming=self._config.llm_streaming,
             timeout=self._config.llm_timeout,
