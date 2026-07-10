@@ -74,6 +74,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+# 排除旧版一次性测试脚本（非 pytest 兼容，会破坏 capture 机制）
+addopts = "--ignore-glob=tests/test_step*"
 
 [dependency-groups]
 # uv 开发依赖（替代弃用的 tool.uv.dev-dependencies）

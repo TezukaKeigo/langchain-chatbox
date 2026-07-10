@@ -21,7 +21,7 @@ SQLite 存储后端 — 基于 aiosqlite 的异步 SQLite 实现。
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -334,7 +334,7 @@ class SQLiteBackend(StorageBackend):
 
         # 自动更新 updated_at
         set_parts.append("updated_at = ?")
-        params.append(_to_iso(datetime.utcnow()))
+        params.append(_to_iso(datetime.now(timezone.utc).replace(tzinfo=None)))
         params.append(user_id)
 
         sql = f"UPDATE users SET {', '.join(set_parts)} WHERE id = ?"
@@ -448,7 +448,7 @@ class SQLiteBackend(StorageBackend):
             return existing
 
         set_parts.append("updated_at = ?")
-        params.append(_to_iso(datetime.utcnow()))
+        params.append(_to_iso(datetime.now(timezone.utc).replace(tzinfo=None)))
         params.append(session_id)
 
         sql = f"UPDATE sessions SET {', '.join(set_parts)} WHERE id = ?"
@@ -660,7 +660,7 @@ class SQLiteBackend(StorageBackend):
             return existing
 
         set_parts.append("updated_at = ?")
-        params.append(_to_iso(datetime.utcnow()))
+        params.append(_to_iso(datetime.now(timezone.utc).replace(tzinfo=None)))
         params.append(preset_id)
 
         sql = f"UPDATE presets SET {', '.join(set_parts)} WHERE id = ?"

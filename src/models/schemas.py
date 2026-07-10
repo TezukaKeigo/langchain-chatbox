@@ -14,7 +14,7 @@ Pydantic 数据模型定义。
 - IDE 智能补全（类型注解完整）
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
@@ -38,7 +38,7 @@ def _now() -> datetime:
     - 保持与数据库层的兼容性
     - 项目所有时间统一使用 UTC
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============================================================

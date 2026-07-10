@@ -30,7 +30,7 @@ MySQL 存储后端 — 基于 aiomysql 的异步 MySQL 实现。
     await backend.close()            # 关闭连接池
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .base import StorageBackend
@@ -421,7 +421,7 @@ class MySQLBackend(StorageBackend):
             return existing
 
         set_parts.append("updated_at = %s")
-        params.append(datetime.utcnow().isoformat(sep=" ", timespec="seconds"))
+        params.append(datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"))
         params.append(user_id)
 
         sql = f"UPDATE users SET {', '.join(set_parts)} WHERE id = %s"
@@ -544,7 +544,7 @@ class MySQLBackend(StorageBackend):
             return existing
 
         set_parts.append("updated_at = %s")
-        params.append(datetime.utcnow().isoformat(sep=" ", timespec="seconds"))
+        params.append(datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"))
         params.append(session_id)
 
         sql = f"UPDATE sessions SET {', '.join(set_parts)} WHERE id = %s"
@@ -771,7 +771,7 @@ class MySQLBackend(StorageBackend):
             return existing
 
         set_parts.append("updated_at = %s")
-        params.append(datetime.utcnow().isoformat(sep=" ", timespec="seconds"))
+        params.append(datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"))
         params.append(preset_id)
 
         sql = f"UPDATE presets SET {', '.join(set_parts)} WHERE id = %s"

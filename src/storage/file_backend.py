@@ -42,7 +42,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -327,7 +327,7 @@ class FileBackend(StorageBackend):
                 if key in allowed and value is not None:
                     users[user_id][key] = value
 
-            users[user_id]["updated_at"] = datetime.utcnow().isoformat()
+            users[user_id]["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             await self._write_json(self._users_path(), users)
 
         return await self.get_user(user_id)
@@ -476,7 +476,7 @@ class FileBackend(StorageBackend):
                 if key in allowed and value is not None:
                     sessions[session_id][key] = value
 
-            sessions[session_id]["updated_at"] = datetime.utcnow().isoformat()
+            sessions[session_id]["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             await self._write_json(self._sessions_path(), sessions)
 
         return await self.get_session(session_id)
@@ -702,7 +702,7 @@ class FileBackend(StorageBackend):
                 if key in allowed and value is not None:
                     presets[preset_id][key] = value
 
-            presets[preset_id]["updated_at"] = datetime.utcnow().isoformat()
+            presets[preset_id]["updated_at"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             await self._write_json(self._presets_path(), presets)
 
         return await self.get_preset(preset_id)
