@@ -101,16 +101,23 @@ class StorageFactory:
     async def _create_mysql(config: "ConfigManager") -> StorageBackend:
         """创建 MySQL 后端（Step 11 实现）。
 
-        Args:
-            config: 配置管理器
-
-        Raises:
-            NotImplementedError: 当前步骤尚未实现
+        从 config.mysql_config 读取连接参数，
+        包括 host/port/user/password/database 和连接池配置。
         """
-        raise NotImplementedError(
-            "MySQL 后端将在 Step 11 中实现。"
-            "当前请使用 SQLite 后端（config.yaml 中 storage.type = 'sqlite'）"
+        from .mysql_backend import MySQLBackend
+
+        mysql_cfg = config.mysql_config
+        backend = MySQLBackend(
+            host=mysql_cfg["host"],
+            port=mysql_cfg["port"],
+            user=mysql_cfg["user"],
+            password=mysql_cfg["password"],
+            database=mysql_cfg["database"],
+            pool_size=mysql_cfg["pool_size"],
+            pool_recycle=mysql_cfg["pool_recycle"],
         )
+        await backend.initialize()
+        return backend
 
     @staticmethod
     async def _create_file(config: "ConfigManager") -> StorageBackend:
