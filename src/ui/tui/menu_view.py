@@ -219,7 +219,7 @@ class MenuView:
         """
         while True:
             console.clear()
-            print_header("会话管理", subtitle="新建 / 加载 / 重命名 / 删除会话")
+            print_header("会话管理", subtitle="新建 / 加载 / 重命名 / 删除 / 搜索")
 
             # 检查前置条件
             if not self._state.get("current_user_id"):
@@ -238,6 +238,7 @@ class MenuView:
                 _opt("3", "会话列表", "查看当前用户的所有会话"),
                 _opt("4", "重命名会话", "修改会话标题"),
                 _opt("5", "删除会话", "删除指定会话及其所有消息"),
+                _opt("6", "搜索消息", "在所有历史消息中搜索关键词"),
                 _opt("0", "返回主菜单", ""),
             ]
 
@@ -248,7 +249,7 @@ class MenuView:
             print()
 
             choice = await self._get_choice(
-                "请选择操作 [0-5]", valid_keys=["0", "1", "2", "3", "4", "5"]
+                "请选择操作 [0-6]", valid_keys=["0", "1", "2", "3", "4", "5", "6"]
             )
 
             if choice == "0":
@@ -268,6 +269,8 @@ class MenuView:
                 await self._rename_session()
             elif choice == "5":
                 await self._delete_session()
+            elif choice == "6":
+                await self._search_messages()
 
     # ============================================================
     # 预设管理子菜单
@@ -1026,6 +1029,145 @@ class MenuView:
             print_error(f"会话 '{title}' 不存在或已被删除")
 
         await self._press_enter_to_continue()
+
+    # ============================================================
+    # 消息搜索（Step 9）
+    # ============================================================
+
+    async def _search_messages(self) -> None:
+        """在用户的所有历史消息中搜索关键词。
+
+        流程：
+        1. 输入搜索关键词
+        2. 通过 SessionManager 在所有会话中搜索
+        3. 展示匹配的消息列表（含所属会话标题、角色、时间）
+        4. 可以按编号查看某条消息的完整内容
+        """
+        console.clear()
+        print_header("搜索消息", subtitle="在所有历史消息中搜索关键词")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        user_id = self._state["current_user_id"]
+
+        # 1. 输入关键词
+        print_info("请输入搜索关键词（在消息内容中模糊匹配）")
+        keyword = await self._get_text_input("搜索关键词: ")
+        keyword = keyword.strip()
+
+        if not keyword:
+            print_info("已取消（关键词为空）")
+            await self._press_enter_to_continue()
+            return
+
+        # 2. 执行搜索
+        try:
+            results = await session_mgr.search_messages(user_id, keyword)
+        except Exception as e:
+            print_error(f"搜索失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        # 3. 展示结果
+        if not results:
+            print()
+            print_info(f"未找到包含 '{keyword}' 的消息")
+            await self._press_enter_to_continue()
+            return
+
+        # 循环展示搜索结果（支持查看详情）
+        while True:
+            console.clear()
+            print_header("搜索结果", subtitle=f"关键词: '{keyword}' — 找到 {len(results)} 条匹配")
+
+            # 展示摘要列表
+            print()
+            for i, msg in enumerate(results, 1):
+                session_title = msg.get("session_title", "未知会话")
+                role = msg.get("role", "?")
+                role_label = "你" if role == "human" else "AI"
+                role_color = Theme.USER_ROLE if role == "human" else Theme.AI_ROLE
+                created = msg.get("created_at", "")
+                if isinstance(created, str):
+                    created = created.replace("T", " ")[:16]
+
+                # 截取匹配内容摘要
+                content = msg.get("content", "")
+                summary = content[:100].replace("\n", " ") + ("..." if len(content) > 100 else "")
+
+                # 高亮关键词
+                from rich.text import Text
+                line = Text()
+                line.append(f"  {i}. ", style=Theme.HIGHLIGHT)
+                line.append(f"[{session_title}] ", style=Theme.MUTED)
+                line.append(f"[{role_label}] ", style="bold " + role_color)
+                line.append(summary, style="")
+                console.print(line)
+                console.print(f"     [{Theme.MUTED}]{created}[/{Theme.MUTED}]")
+
+            print()
+            total = len(results)
+            valid_keys = [str(i) for i in range(1, total + 1)] + ["0"]
+            choice = await self._get_choice(
+                f"选择消息查看详情 [1-{total}]，0=返回",
+                valid_keys=valid_keys,
+            )
+
+            if choice == "0":
+                return
+
+            # 4. 查看完整消息
+            idx = int(choice) - 1
+            msg = results[idx]
+
+            console.clear()
+            session_title = msg.get("session_title", "未知会话")
+            role = msg.get("role", "?")
+            role_label = "用户" if role == "human" else "AI"
+            role_color = Theme.USER_ROLE if role == "human" else Theme.AI_ROLE
+            created = msg.get("created_at", "")
+            if isinstance(created, str):
+                created = created.replace("T", " ")[:16]
+
+            print_header(
+                "消息详情",
+                subtitle=f"会话: {session_title} | 角色: {role_label} | 时间: {created}",
+            )
+
+            # 高亮关键词显示完整内容
+            from rich.text import Text
+            from rich.panel import Panel
+
+            content = msg.get("content", "")
+            # 构建高亮文本：将关键词用显眼颜色标出
+            highlighted = Text()
+            remaining = content
+            keyword_lower = keyword.lower()
+            while remaining:
+                pos = remaining.lower().find(keyword_lower)
+                if pos == -1:
+                    highlighted.append(remaining)
+                    break
+                # 关键词前的内容
+                if pos > 0:
+                    highlighted.append(remaining[:pos])
+                # 高亮关键词
+                highlighted.append(remaining[pos:pos + len(keyword)], style="bold " + Theme.HIGHLIGHT)
+                remaining = remaining[pos + len(keyword):]
+
+            console.print()
+            console.print(Panel(
+                highlighted,
+                border_style=Theme.MUTED,
+                padding=(1, 2),
+            ))
+
+            print()
+            await self._press_enter_to_continue()
+            # 回到结果列表
 
     async def _pick_session_from_list(
         self,

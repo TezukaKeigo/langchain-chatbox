@@ -431,6 +431,31 @@ class SessionManager:
         self._state["current_session_title"] = session.get("title", "新会话")
 
     # ============================================================
+    # 消息搜索（Step 9）
+    # ============================================================
+
+    async def search_messages(
+        self,
+        user_id: str,
+        keyword: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """在用户的所有会话中搜索包含关键词的消息。
+
+        使用 SQL LIKE 进行模糊匹配，搜索范围限定在当前用户的
+        所有会话中。每条结果附带所属会话标题，方便定位上下文。
+
+        Args:
+            user_id: 用户 ID（限定搜索范围）
+            keyword: 搜索关键词
+            limit: 返回数量上限
+
+        Returns:
+            匹配的消息列表，每条消息附带 session_title 字段
+        """
+        return await self._storage.search_messages(user_id, keyword, limit)
+
+    # ============================================================
     # 状态清理
     # ============================================================
 
