@@ -25,9 +25,12 @@
     await session_mgr.auto_save_turn(session_id, user_msg, ai_msg, tokens)
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from src.storage.base import StorageBackend
+
+logger = logging.getLogger("langchain_chat")
 
 
 class SessionManager:
@@ -103,6 +106,7 @@ class SessionManager:
             model_name=model_name,
             preset_id=preset_id,
         )
+        logger.info("新建会话 — id=%s, model=%s", session["id"], model_name)
 
         # 更新全局状态
         self._state["current_session_id"] = session["id"]

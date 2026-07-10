@@ -23,9 +23,12 @@
     await user_mgr.switch_user(user["id"])
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from src.storage.base import StorageBackend
+
+logger = logging.getLogger("langchain_chat")
 
 
 class UserManager:
@@ -93,6 +96,7 @@ class UserManager:
 
         # 3. 创建用户
         user = await self._storage.create_user(username, default_model=default_model)
+        logger.info("用户创建成功 — username=%s, id=%s", username, user["id"])
         return user
 
     async def list_users(self) -> List[Dict[str, Any]]:

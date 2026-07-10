@@ -23,12 +23,15 @@ TUI 主应用 — 菜单路由、状态管理、主事件循环。
 """
 
 import asyncio
+import logging
 import sys
 from typing import Any, Dict, Optional
 
 from .widgets import console, print_error, print_header, print_info
 from .menu_view import MenuView
 from .chat_view import ChatView
+
+logger = logging.getLogger("langchain_chat")
 
 
 class TUIApp:
@@ -165,6 +168,7 @@ class TUIApp:
             "LangChain Chat",
             subtitle="正在启动...",
         )
+        logger.info("TUI 主循环启动")
 
         try:
             while self._running:

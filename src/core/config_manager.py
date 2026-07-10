@@ -19,6 +19,7 @@
   api_key = config.api_key       # 直接属性访问
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("langchain_chat")
 
 
 # ============================================================
@@ -159,6 +162,11 @@ class ConfigManager:
         # 5. 加载 config/presets.yaml 内置预设
         self._presets: List[Dict[str, Any]] = []
         self._load_presets()
+
+        logger.debug(
+            "ConfigManager 初始化完成 — env=%s, model=%s, storage=%s",
+            self._env, self.model_name, self.storage_type,
+        )
 
     # ----------------------------------------------------------
     # 内部加载方法

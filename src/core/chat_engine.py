@@ -27,11 +27,14 @@
     print(engine.get_stats())
 """
 
+import logging
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+
+logger = logging.getLogger("langchain_chat")
 
 # ============================================================
 # 错误类型
@@ -309,8 +312,10 @@ class ChatEngine:
         Args:
             model_name: 目标模型名称（如 "gpt-4o"、"deepseek-chat"）
         """
+        old_model = self._current_model
         self._current_model = model_name
         self._llm = None  # 使缓存的 LLM 实例失效，下次调用时懒重建
+        logger.info("模型切换: '%s' → '%s'", old_model, model_name)
 
     @property
     def current_model(self) -> str:
@@ -626,6 +631,10 @@ class ChatEngine:
         # 如果出错，在清理后抛出
         if stream_error is not None:
             self._history.pop()  # 回滚用户消息
+            logger.error(
+                "LLM 流式调用失败（模型: %s）: %s",
+                self._current_model, stream_error,
+            )
             raise LLMCallError(
                 f"LLM 流式调用失败（模型: {self._current_model}）: {stream_error}"
             ) from stream_error

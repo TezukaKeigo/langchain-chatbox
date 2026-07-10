@@ -123,13 +123,15 @@ class StorageFactory:
     async def _create_file(config: "ConfigManager") -> StorageBackend:
         """创建 File 后端（Step 12 实现）。
 
-        Args:
-            config: 配置管理器
-
-        Raises:
-            NotImplementedError: 当前步骤尚未实现
+        文件存储路径从 config.yaml 的 storage.file.path 读取，
+        默认值为 data/file_storage。
+        存储格式从 storage.file.format 读取（当前仅支持 json）。
         """
-        raise NotImplementedError(
-            "File 文件系统后端将在 Step 12 中实现。"
-            "当前请使用 SQLite 后端（config.yaml 中 storage.type = 'sqlite'）"
-        )
+        from .file_backend import FileBackend
+
+        file_cfg = config.get("storage", "file", default={})
+        root_path = file_cfg.get("path", "data/file_storage")
+        fmt = file_cfg.get("format", "json")
+        backend = FileBackend(root_path=root_path, fmt=fmt)
+        await backend.initialize()
+        return backend
