@@ -110,8 +110,10 @@ class ChatEngine:
         self._last_prompt_tokens: int = 0
         self._last_completion_tokens: int = 0
 
-        # 当前模型
-        self._current_model: str = config.model_name
+        # 当前模型（优先使用 state 中用户选择的模型，回退到全局配置）
+        self._current_model: str = (
+            self._state.get("current_model") or config.model_name
+        )
 
     # ============================================================
     # LLM 实例管理
