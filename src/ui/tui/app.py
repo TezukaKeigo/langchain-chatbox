@@ -260,8 +260,14 @@ class TUIApp:
         await self._menu_view.show_user_menu()
 
     async def _handle_session_menu(self) -> None:
-        """处理会话管理菜单。"""
-        await self._menu_view.show_session_menu()
+        """处理会话管理菜单。
+
+        Step 8: 会话菜单可能返回 "start_chat"，
+        表示用户新建/加载会话后要立即进入对话。
+        """
+        action = await self._menu_view.show_session_menu()
+        if action == "start_chat":
+            await self._handle_chat()
 
     async def _handle_preset_menu(self) -> None:
         """处理预设管理菜单。"""

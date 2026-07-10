@@ -211,15 +211,22 @@ class MenuView:
         """显示会话管理子菜单。
 
         包含会话的新建、加载、重命名、删除操作。
-        Step 2 中所有操作均为 stub 占位，
-        完整实现将在 Step 7-8 完成。
+        Step 8 完整实现所有会话操作。
 
         Returns:
-            子操作指令字符串，或 None 返回主菜单
+            - "start_chat": 需要进入对话界面
+            - None: 返回主菜单
         """
         while True:
             console.clear()
             print_header("会话管理", subtitle="新建 / 加载 / 重命名 / 删除会话")
+
+            # 检查前置条件
+            if not self._state.get("current_user_id"):
+                print_warning("请先在「用户管理」中选择一个用户")
+                print_info("会话管理需要确定当前用户")
+                await self._press_enter_to_continue()
+                return None
 
             current_session = self._state.get("current_session_title")
             if current_session:
@@ -245,19 +252,22 @@ class MenuView:
             )
 
             if choice == "0":
-                break
+                return None
 
-            stub_messages = {
-                "1": "新建会话功能将在 Step 7（核心里程碑）中实现",
-                "2": "加载历史会话功能将在 Step 8 中实现",
-                "3": "会话列表功能将在 Step 8 中实现",
-                "4": "重命名会话功能将在 Step 8 中实现",
-                "5": "删除会话功能将在 Step 8 中实现",
-            }
-            print_info(stub_messages[choice])
-            await self._press_enter_to_continue()
-
-        return None
+            if choice == "1":
+                result = await self._new_session()
+                if result == "start_chat":
+                    return "start_chat"
+            elif choice == "2":
+                result = await self._load_session()
+                if result == "start_chat":
+                    return "start_chat"
+            elif choice == "3":
+                await self._list_sessions()
+            elif choice == "4":
+                await self._rename_session()
+            elif choice == "5":
+                await self._delete_session()
 
     # ============================================================
     # 预设管理子菜单
@@ -691,6 +701,383 @@ class MenuView:
         print()
         print_info(f"共 {len(users)} 个用户")
         await self._press_enter_to_continue()
+
+    # ============================================================
+    # 会话管理 — 真实实现（Step 8）
+    # ============================================================
+
+    def _get_session_manager(self):
+        """安全获取 SessionManager 实例。
+
+        Returns:
+            SessionManager 实例，或 None（未初始化时）
+        """
+        session_mgr = self._state.get("session_manager")
+        if session_mgr is None:
+            print_error("会话管理器尚未初始化，请重启程序")
+        return session_mgr
+
+    async def _new_session(self) -> Optional[str]:
+        """创建新会话。
+
+        流程：
+        1. 通过 SessionManager 强制创建新会话
+        2. 询问用户是否立即开始对话
+        3. 如果选择"是"，返回 "start_chat"
+
+        Returns:
+            "start_chat" 表示需要进入对话；None 表示留在菜单
+        """
+        console.clear()
+        print_header("新建会话", subtitle="清空上下文，开始全新对话")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return None
+
+        user_id = self._state["current_user_id"]
+        model_name = self._state.get("current_model", "deepseek-v4-flash")
+        preset_id = self._state.get("current_preset_id")
+
+        try:
+            session = await session_mgr.create_new_session(
+                user_id=user_id,
+                model_name=model_name,
+                preset_id=preset_id,
+            )
+        except Exception as e:
+            print_error(f"创建会话失败: {e}")
+            await self._press_enter_to_continue()
+            return None
+
+        print()
+        print_success(f"新会话已创建: {session['title']}")
+        print_info(f"模型: {session.get('model_name', '?')}")
+
+        # 询问是否立即进入对话
+        print()
+        print_info("是否立即开始对话？")
+        choice = await self._get_choice(
+            "输入 y 开始对话，n 返回菜单",
+            valid_keys=["y", "n"],
+        )
+
+        if choice == "y":
+            return "start_chat"
+        return None
+
+    async def _load_session(self) -> Optional[str]:
+        """加载历史会话。
+
+        流程：
+        1. 列出当前用户的所有会话
+        2. 用户按编号选择目标会话
+        3. 切换到该会话（更新全局状态）
+        4. 询问用户是否立即进入对话
+
+        Returns:
+            "start_chat" 表示需要进入对话；None 表示留在菜单
+        """
+        console.clear()
+        print_header("加载历史会话", subtitle="浏览并加载之前的对话")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return None
+
+        user_id = self._state["current_user_id"]
+
+        # 获取会话列表
+        try:
+            sessions = await session_mgr.list_user_sessions(user_id)
+        except Exception as e:
+            print_error(f"获取会话列表失败: {e}")
+            await self._press_enter_to_continue()
+            return None
+
+        if not sessions:
+            print_warning("暂无历史会话")
+            print_info("请先开始对话，会话将自动保存")
+            await self._press_enter_to_continue()
+            return None
+
+        # 展示会话列表供选择
+        session = await self._pick_session_from_list(sessions, "选择要加载的会话")
+        if session is None:
+            return None
+
+        # 切换到选中的会话
+        session_mgr.switch_to_session(session)
+        print()
+        print_success(f"已切换到会话: {session.get('title', '新会话')}")
+
+        # 询问是否立即进入对话
+        print()
+        print_info("是否立即开始对话？")
+        choice = await self._get_choice(
+            "输入 y 开始对话，n 返回菜单",
+            valid_keys=["y", "n"],
+        )
+
+        if choice == "y":
+            return "start_chat"
+        return None
+
+    async def _list_sessions(self) -> None:
+        """显示当前用户的所有会话列表。
+
+        以 Rich 表格形式展示：
+        - 序号
+        - 会话标题
+        - 模型
+        - Prompt Tokens / Completion Tokens
+        - 最后更新时间
+        """
+        console.clear()
+        print_header("会话列表", subtitle="当前用户的所有会话")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        user_id = self._state["current_user_id"]
+
+        try:
+            sessions = await session_mgr.list_user_sessions(user_id)
+        except Exception as e:
+            print_error(f"获取会话列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not sessions:
+            print_warning("暂无历史会话")
+            print_info("开始对话后，会话将自动创建并保存")
+            await self._press_enter_to_continue()
+            return
+
+        current_id = self._state.get("current_session_id")
+
+        columns = [
+            {"key": "会话标题", "style": "bold"},
+            {"key": "模型", "style": Theme.MUTED},
+            {"key": "Prompt Tokens", "style": Theme.MUTED},
+            {"key": "Completion Tokens", "style": Theme.MUTED},
+            {"key": "最后更新", "style": Theme.MUTED},
+        ]
+        rows = []
+        for s in sessions:
+            is_current = s["id"] == current_id
+            title = s.get("title", "新会话")
+            if is_current:
+                title = f"★ {title}"
+            updated = s.get("updated_at", "")
+            if isinstance(updated, str):
+                updated = updated.replace("T", " ")[:16]
+            rows.append([
+                title,
+                s.get("model_name", "?"),
+                str(s.get("total_prompt_tokens", 0)),
+                str(s.get("total_completion_tokens", 0)),
+                updated,
+            ])
+
+        print()
+        print_table("历史会话", columns, rows, show_index=True)
+        print()
+        print_info(f"共 {len(sessions)} 个会话")
+        if current_id:
+            print_info("★ 标记为当前活跃会话")
+        await self._press_enter_to_continue()
+
+    async def _rename_session(self) -> None:
+        """重命名会话。
+
+        流程：
+        1. 列出当前用户的所有会话
+        2. 用户按编号选择目标会话
+        3. 输入新标题
+        4. 执行重命名
+        """
+        console.clear()
+        print_header("重命名会话", subtitle="修改会话标题")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        user_id = self._state["current_user_id"]
+
+        try:
+            sessions = await session_mgr.list_user_sessions(user_id)
+        except Exception as e:
+            print_error(f"获取会话列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not sessions:
+            print_warning("暂无历史会话可重命名")
+            await self._press_enter_to_continue()
+            return
+
+        session = await self._pick_session_from_list(sessions, "选择要重命名的会话")
+        if session is None:
+            return
+
+        # 输入新标题
+        print()
+        old_title = session.get("title", "新会话")
+        print_info(f"当前标题: {old_title}")
+        print_info("请输入新标题（1-200 字符，直接回车取消）")
+        new_title = await self._get_text_input("新标题: ")
+        new_title = new_title.strip()
+
+        if not new_title:
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        # 执行重命名
+        try:
+            updated = await session_mgr.rename_session(session["id"], new_title)
+            print()
+            print_success(f"会话已重命名: '{old_title}' → '{updated['title']}'")
+        except Exception as e:
+            print_error(f"重命名失败: {e}")
+
+        await self._press_enter_to_continue()
+
+    async def _delete_session(self) -> None:
+        """删除会话及其所有消息。
+
+        流程：
+        1. 列出当前用户的所有会话
+        2. 用户按编号选择目标会话
+        3. 二次确认（显示警告）
+        4. 执行删除
+        """
+        console.clear()
+        print_header("删除会话", subtitle="删除指定会话及其所有消息")
+
+        session_mgr = self._get_session_manager()
+        if session_mgr is None:
+            await self._press_enter_to_continue()
+            return
+
+        user_id = self._state["current_user_id"]
+
+        try:
+            sessions = await session_mgr.list_user_sessions(user_id)
+        except Exception as e:
+            print_error(f"获取会话列表失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if not sessions:
+            print_warning("暂无历史会话可删除")
+            await self._press_enter_to_continue()
+            return
+
+        session = await self._pick_session_from_list(sessions, "选择要删除的会话")
+        if session is None:
+            return
+
+        # 二次确认
+        print()
+        print_warning("⚠  此操作不可撤销！将永久删除以下数据：")
+        print()
+        is_current = session["id"] == self._state.get("current_session_id")
+        current_mark = f" [{Theme.WARNING}](当前会话)[/{Theme.WARNING}]" if is_current else ""
+        console.print(f"    [{Theme.ERROR}]• 会话: {session.get('title', '新会话')}{current_mark}[/{Theme.ERROR}]")
+        console.print(f"    [{Theme.ERROR}]• 该会话下的所有对话消息[/{Theme.ERROR}]")
+        console.print(f"    [{Theme.ERROR}]• Token 统计记录[/{Theme.ERROR}]")
+        print()
+
+        title = session.get("title", "新会话")
+        print_warning(f"确认删除会话 '{title}'？")
+        print()
+        choice = await self._get_choice(
+            "输入 y 确认删除，n 取消",
+            valid_keys=["y", "n"],
+        )
+
+        if choice == "n":
+            print_info("已取消")
+            await self._press_enter_to_continue()
+            return
+
+        # 执行删除
+        try:
+            success = await session_mgr.delete_session(session["id"])
+        except Exception as e:
+            print_error(f"删除失败: {e}")
+            await self._press_enter_to_continue()
+            return
+
+        if success:
+            print()
+            print_success(f"会话 '{title}' 及其所有消息已删除")
+            if is_current:
+                print_info("该会话为当前活跃会话，已自动清除状态")
+        else:
+            print_error(f"会话 '{title}' 不存在或已被删除")
+
+        await self._press_enter_to_continue()
+
+    async def _pick_session_from_list(
+        self,
+        sessions: List[Dict[str, Any]],
+        prompt_label: str = "选择会话",
+    ) -> Optional[Dict[str, Any]]:
+        """从会话列表中让用户选择一个会话。
+
+        共享的会话选择逻辑，被 _load_session、_rename_session、
+        _delete_session 复用。
+
+        Args:
+            sessions: 会话数据字典列表
+            prompt_label: 选择提示标签
+
+        Returns:
+            选中的 Session 数据字典；用户取消时返回 None
+        """
+        current_id = self._state.get("current_session_id")
+
+        print()
+        for i, s in enumerate(sessions, 1):
+            title = s.get("title", "新会话")
+            model = s.get("model_name", "?")
+            is_current = s["id"] == current_id
+            tag = " ★ 当前会话" if is_current else ""
+            updated = s.get("updated_at", "")
+            if isinstance(updated, str):
+                updated = updated.replace("T", " ")[:16]
+
+            console.print(
+                f"  [{Theme.HIGHLIGHT}]{i}.[/{Theme.HIGHLIGHT}] "
+                f"[bold]{title}[/bold]{tag}"
+            )
+            console.print(
+                f"     [{Theme.MUTED}]模型: {model}  "
+                f"更新于: {updated}[/{Theme.MUTED}]"
+            )
+
+        print()
+        valid_keys = [str(i) for i in range(1, len(sessions) + 1)] + ["0"]
+        choice = await self._get_choice(
+            f"{prompt_label} [1-{len(sessions)}, 0=取消]",
+            valid_keys=valid_keys,
+        )
+
+        if choice == "0":
+            print_info("已取消")
+            return None
+
+        idx = int(choice) - 1
+        return sessions[idx]
 
     # ============================================================
     # 预设管理 — 真实实现（Step 5）

@@ -348,6 +348,89 @@ class SessionManager:
         }
 
     # ============================================================
+    # 会话列表与管理（Step 8）
+    # ============================================================
+
+    async def list_user_sessions(
+        self,
+        user_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """列出用户的所有会话。
+
+        按更新时间倒序排列，最近活跃的会话在前。
+
+        Args:
+            user_id: 用户 ID
+            limit: 每页数量上限
+            offset: 分页偏移量
+
+        Returns:
+            Session 数据字典列表
+        """
+        return await self._storage.list_sessions_by_user(user_id, limit, offset)
+
+    async def rename_session(
+        self,
+        session_id: str,
+        new_title: str,
+    ) -> Dict[str, Any]:
+        """重命名会话。
+
+        更新数据库中的会话标题，如果该会话是当前活跃会话，
+        同步更新全局状态中的标题。
+
+        Args:
+            session_id: 会话 ID
+            new_title: 新标题
+
+        Returns:
+            更新后的 Session 数据字典
+
+        Raises:
+            ValueError: 会话不存在
+        """
+        session = await self._storage.update_session(session_id, title=new_title)
+
+        # 如果是当前会话，同步更新状态
+        if session_id == self._state.get("current_session_id"):
+            self._state["current_session_title"] = new_title
+
+        return session
+
+    async def delete_session(self, session_id: str) -> bool:
+        """删除会话及其所有关联消息。
+
+        如果删除的是当前活跃会话，自动清除状态。
+        CASCADE 会自动删除该会话下的所有消息。
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            True 表示删除成功；会话不存在返回 False
+        """
+        success = await self._storage.delete_session(session_id)
+
+        if success and session_id == self._state.get("current_session_id"):
+            self.clear_current_session()
+
+        return success
+
+    def switch_to_session(self, session: Dict[str, Any]) -> None:
+        """切换到指定会话（仅更新状态，不操作数据库）。
+
+        将目标会话设为当前活跃会话，后续 get_or_create_session()
+        会验证并加载该会话。
+
+        Args:
+            session: 目标 Session 数据字典
+        """
+        self._state["current_session_id"] = session["id"]
+        self._state["current_session_title"] = session.get("title", "新会话")
+
+    # ============================================================
     # 状态清理
     # ============================================================
 
