@@ -153,6 +153,7 @@ class ChatEngine:
             streaming=self._config.llm_streaming,
             timeout=self._config.llm_timeout,
             max_retries=self._config.llm_max_retries,
+            model_kwargs={"stream_options": {"include_usage": True}},
         )
 
     def _get_llm(self) -> ChatOpenAI:

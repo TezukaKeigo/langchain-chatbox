@@ -188,11 +188,11 @@ class ChatView:
                 continue
 
             if user_input.lower() == "/model":
-                await self._switch_model_in_chat()
-                console.clear()
-                self._print_chat_header(session, messages=[])
-                print_info("模型已切换，可以继续对话")
-                console.print()
+                if await self._switch_model_in_chat():
+                    console.clear()
+                    self._print_chat_header(session, messages=[])
+                    print_info("模型已切换，可以继续对话")
+                    console.print()
                 continue
 
             if not user_input:
@@ -270,12 +270,15 @@ class ChatView:
         print_success("已切换到新会话")
         console.print()
 
-    async def _switch_model_in_chat(self) -> None:
+    async def _switch_model_in_chat(self) -> bool:
         """在对话中切换 LLM 模型（Step 10）。
 
         从配置的 available_models 中展示可选模型，
         用户选择后更新引擎和全局状态。
         切换后保留对话历史，使用新模型继续对话。
+
+        Returns:
+            True 表示切换成功，False 表示取消或失败。
         """
         from prompt_toolkit import prompt as pt_prompt
         from prompt_toolkit.styles import Style as PTStyle
@@ -283,12 +286,12 @@ class ChatView:
         config = self._state.get("config")
         if config is None:
             print_error("配置管理器尚未初始化")
-            return
+            return False
 
         available = config.available_models
         if not available:
             print_warning("未配置可用模型列表")
-            return
+            return False
 
         current_model = self._state.get("current_model", "")
 
@@ -327,16 +330,16 @@ class ChatView:
                 in_thread=True,
             )
         except (KeyboardInterrupt, EOFError):
-            return
+            return False
 
         choice = choice.strip()
         if not choice:
             print_info("已取消")
-            return
+            return False
 
         if choice not in valid_keys:
             print_error(f"无效选择: {choice}")
-            return
+            return False
 
         idx = int(choice) - 1
         selected = available[idx]
@@ -344,26 +347,24 @@ class ChatView:
 
         if new_model == current_model:
             print_info(f"已经是当前模型: {new_model}")
-            return
+            return False
+
+        # 验证目标模型配置（提前创建 LLM 实例以检查 API Key 有效性）
+        try:
+            new_llm = self._engine._create_llm(new_model)
+        except Exception as e:
+            print_error(f"模型切换失败 — {e}")
+            return False
 
         # 更新状态和引擎
         old_model = current_model
         self._state["current_model"] = new_model
-
-        # 更新引擎的模型配置
-        if hasattr(self._engine, "_current_model"):
-            self._engine._current_model = new_model
-            # 重新创建 LLM 实例以使用新模型的 API 配置
-            if hasattr(self._engine, "_create_llm"):
-                try:
-                    self._engine._llm = self._engine._create_llm(new_model)
-                except Exception as e:
-                    # 重建失败：清空旧 LLM，下次对话时懒重建
-                    self._engine._llm = None
-                    print_warning(f"模型切换将在下次对话时生效 ({e})")
+        self._engine.switch_model(new_model)
+        self._engine._llm = new_llm  # 使用已验证的 LLM 实例，避免下次对话时懒重建失败
 
         print_success(f"模型已切换: '{old_model}' → '{new_model}'")
         print_info("对话历史已保留，下一轮对话使用新模型")
+        return True
 
     # ============================================================
     # 界面渲染辅助
