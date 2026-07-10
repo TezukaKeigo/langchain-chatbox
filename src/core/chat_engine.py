@@ -540,6 +540,7 @@ class ChatEngine:
 
         full_content = ""
         final_chunk = None
+        all_chunks = []  # 保存全部 chunk，用于兜底提取 token 信息
         stream_error = None
 
         try:
@@ -548,6 +549,8 @@ class ChatEngine:
                 delta = chunk.content if hasattr(chunk, "content") else ""
                 if isinstance(delta, str) and delta:
                     full_content += delta
+
+                all_chunks.append(chunk)
 
                 # 保存最后一个含 Token 信息的 chunk
                 # 流式传输的最后一个 chunk 通常是空的，真正有用的在倒数第二个
@@ -578,12 +581,42 @@ class ChatEngine:
             if stream_error is None:
                 # 成功：将完整 AI 回复添加到历史
                 ai_message = AIMessage(content=full_content)
-                # 从最后一个有效 chunk 复制 metadata（含 Token 信息）
+
+                # 如果流式过程中没找到 token 信息，从全部 chunk 中兜底扫描
+                # Qwen / Kimi 有时不在最后一个 chunk 返回 usage，
+                # 而是分散在某几个 chunk 中
+                if final_chunk is None:
+                    for chunk in reversed(all_chunks):
+                        um = getattr(chunk, "usage_metadata", None)
+                        rm = getattr(chunk, "response_metadata", None) or {}
+                        if um or rm.get("usage") or rm.get("token_usage"):
+                            final_chunk = chunk
+                            break
+
+                # 从 final_chunk 复制 metadata 到合成的 AIMessage
                 if final_chunk is not None:
                     if hasattr(final_chunk, "response_metadata"):
                         ai_message.response_metadata = final_chunk.response_metadata
                     if hasattr(final_chunk, "usage_metadata"):
                         ai_message.usage_metadata = final_chunk.usage_metadata
+
+                # 兜底：如果 final_chunk 仍然没有 token 信息，
+                # 尝试合并所有 chunk 的 response_metadata 中的 usage
+                if not getattr(ai_message, "usage_metadata", None) and \
+                   not (getattr(ai_message, "response_metadata", None) or {}).get("usage"):
+                    aggregated_usage = {}
+                    for chunk in all_chunks:
+                        rm = getattr(chunk, "response_metadata", None) or {}
+                        for key in ("usage", "token_usage"):
+                            if key in rm:
+                                if isinstance(rm[key], dict):
+                                    for k, v in rm[key].items():
+                                        if v and v > 0:
+                                            aggregated_usage[k] = v
+                    if aggregated_usage:
+                        ai_message.response_metadata = \
+                            (getattr(ai_message, "response_metadata", None) or {}) | {"usage": aggregated_usage}
+
                 self._history.append(ai_message)
 
                 # 提取 Token 统计（从完整的 AIMessage 中读取）

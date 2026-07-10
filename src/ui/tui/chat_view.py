@@ -357,8 +357,10 @@ class ChatView:
             if hasattr(self._engine, "_create_llm"):
                 try:
                     self._engine._llm = self._engine._create_llm(new_model)
-                except Exception:
-                    pass  # 将在下次对话时延迟创建
+                except Exception as e:
+                    # 重建失败：清空旧 LLM，下次对话时懒重建
+                    self._engine._llm = None
+                    print_warning(f"模型切换将在下次对话时生效 ({e})")
 
         print_success(f"模型已切换: '{old_model}' → '{new_model}'")
         print_info("对话历史已保留，下一轮对话使用新模型")
