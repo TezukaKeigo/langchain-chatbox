@@ -151,13 +151,15 @@ class UserManager:
         """设置为当前活跃用户。
 
         同时清除旧的会话上下文（因为切换用户后，
-        旧会话属于上一个用户，不应继续使用）。
+        旧会话属于上一个用户，不应继续使用），
+        并切换到该用户的默认模型。
 
         Args:
-            user: 用户数据字典（至少包含 id 和 username）
+            user: 用户数据字典（至少包含 id、username、default_model）
         """
         self._state["current_user_id"] = user["id"]
         self._state["current_username"] = user["username"]
+        self._state["current_model"] = user.get("default_model", "deepseek-v4-flash")
 
         # 切换用户后清除旧的会话上下文
         self._state["current_session_id"] = None
@@ -174,6 +176,7 @@ class UserManager:
         """
         self._state["current_user_id"] = None
         self._state["current_username"] = None
+        self._state["current_model"] = None
         self._state["current_session_id"] = None
         self._state["current_session_title"] = None
         self._state["current_preset_id"] = None
