@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id                  VARCHAR(36) PRIMARY KEY,
     session_id          VARCHAR(36) NOT NULL,
     role                VARCHAR(20) NOT NULL,
-    content             TEXT DEFAULT '',
+    content             TEXT,
     prompt_tokens       INT DEFAULT 0,
     completion_tokens   INT DEFAULT 0,
     created_at          DATETIME NOT NULL,
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS user_configs (
     id          VARCHAR(36) PRIMARY KEY,
     user_id     VARCHAR(36) NOT NULL,
     `key`       VARCHAR(100) NOT NULL,
-    value       TEXT DEFAULT '',
+    value       TEXT,
     updated_at  DATETIME NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE(user_id, `key`)
