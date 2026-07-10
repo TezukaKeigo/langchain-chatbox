@@ -354,10 +354,15 @@ class ChatEngine:
         """从 LLM 响应消息中提取 Token 用量并更新统计。
 
         兼容多种 Token 信息来源（按优先级）：
-        1. message.usage_metadata — 新版 LangChain 格式
+        1. message.usage_metadata — 新版 LangChain 格式（DeepSeek）
            {"input_tokens": N, "output_tokens": N, "total_tokens": N}
-        2. message.response_metadata["token_usage"] — OpenAI 标准格式
+        2. message.response_metadata["token_usage"] — OpenAI 旧格式
            {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
+        3. message.response_metadata["usage"] — 部分国产模型（Kimi/Qwen）
+           {"prompt_tokens": N, "completion_tokens": N} 或
+           {"input_tokens": N, "output_tokens": N}
+        4. message.usage_metadata 为空的 AIMessageChunk 聚合结果
+           — 遍历所有 chunk 的 response_metadata
 
         如果上游 API 不返回 token 信息（如部分本地模型），
         则所有统计值保持为 0。
@@ -368,19 +373,36 @@ class ChatEngine:
         prompt_tokens = 0
         completion_tokens = 0
 
-        # 优先：新版 LangChain usage_metadata（DeepSeek / 多数 API 返回）
+        # 途径 1：usage_metadata（DeepSeek / OpenAI 新格式）
         usage_md = getattr(message, "usage_metadata", None)
         if usage_md:
             prompt_tokens = usage_md.get("input_tokens", 0)
             completion_tokens = usage_md.get("output_tokens", 0)
 
-        # 备选：response_metadata["token_usage"]（OpenAI 旧格式）
+        # 途径 2：response_metadata["token_usage"]（OpenAI 旧格式）
         if prompt_tokens == 0 and completion_tokens == 0:
             rm = getattr(message, "response_metadata", {}) or {}
             token_usage = rm.get("token_usage", {})
             if token_usage:
                 prompt_tokens = token_usage.get("prompt_tokens", 0)
                 completion_tokens = token_usage.get("completion_tokens", 0)
+
+        # 途径 3：response_metadata["usage"]（Kimi / Qwen / 部分国产模型）
+        if prompt_tokens == 0 and completion_tokens == 0:
+            rm = getattr(message, "response_metadata", {}) or {}
+            usage = rm.get("usage", {})
+            if usage:
+                # 兼容两种字段名
+                prompt_tokens = (
+                    usage.get("prompt_tokens")
+                    or usage.get("input_tokens")
+                    or 0
+                )
+                completion_tokens = (
+                    usage.get("completion_tokens")
+                    or usage.get("output_tokens")
+                    or 0
+                )
 
         if prompt_tokens == 0 and completion_tokens == 0:
             return
@@ -527,15 +549,19 @@ class ChatEngine:
                 if isinstance(delta, str) and delta:
                     full_content += delta
 
-                # 保存最后一个有意义的 chunk（含 Token 信息）
+                # 保存最后一个含 Token 信息的 chunk
                 # 流式传输的最后一个 chunk 通常是空的，真正有用的在倒数第二个
+                # DeepSeek：把 usage 放在 usage_metadata 中
+                # Kimi / Qwen：把 usage 放在 response_metadata["usage"] 中
                 um = getattr(chunk, "usage_metadata", None)
+                rm = getattr(chunk, "response_metadata", None) or {}
                 if um:
                     final_chunk = chunk
-                elif not final_chunk and hasattr(chunk, "response_metadata"):
-                    rm = chunk.response_metadata or {}
-                    if rm.get("finish_reason"):
-                        final_chunk = chunk
+                elif rm.get("usage") or rm.get("token_usage"):
+                    # Kimi / Qwen / 其他国产模型
+                    final_chunk = chunk
+                elif not final_chunk and rm.get("finish_reason"):
+                    final_chunk = chunk
 
                 yield {
                     "content": delta if isinstance(delta, str) else "",

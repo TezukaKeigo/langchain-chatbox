@@ -243,11 +243,12 @@ class MySQLBackend(StorageBackend):
         步骤：
         1. 先用无数据库的连接创建数据库（如不存在）
         2. 创建连接池
-        3. 执行建表语句
+        3. 执行建表语句（抑制已存在警告）
         """
+        import warnings
         import aiomysql
 
-        # 1. 创建数据库（如不存在）
+        # 1. 创建数据库（如不存在，抑制已存在警告）
         try:
             conn = await aiomysql.connect(
                 host=self._host,
@@ -256,11 +257,13 @@ class MySQLBackend(StorageBackend):
                 password=self._password,
                 charset="utf8mb4",
             )
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    f"CREATE DATABASE IF NOT EXISTS `{self._database}` "
-                    f"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-                )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        f"CREATE DATABASE IF NOT EXISTS `{self._database}` "
+                        f"DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+                    )
             conn.close()
         except Exception as e:
             raise RuntimeError(
@@ -281,11 +284,13 @@ class MySQLBackend(StorageBackend):
             autocommit=True,
         )
 
-        # 3. 建表
-        async with self._pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                for sql in _ALL_CREATE_STATEMENTS:
-                    await cur.execute(sql)
+        # 3. 建表（抑制 MySQL 的 "already exists" / "deprecated" 类 warning）
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            async with self._pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    for sql in _ALL_CREATE_STATEMENTS:
+                        await cur.execute(sql)
 
     async def close(self) -> None:
         """关闭连接池，释放资源。"""
